@@ -53,12 +53,12 @@ public final class WhiteTipped {
         guard let parameters = parameters else { return }
         
         connection = NWConnection(to: endpoint, using: parameters)
+        connection?.start(queue: .global())
         do {
         try await channelRead()
         } catch {
             print(error)
         }
-        connection?.start(queue: .global())
         await monitorConnection()
     }
     
