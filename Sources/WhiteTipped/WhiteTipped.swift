@@ -11,7 +11,7 @@ public final class WhiteTipped {
     
     public var headers: [String: String]?
     public var urlRequest: URLRequest?
-    public var cookies: HTTPCookie
+    public var cookies: HTTPCookie?
     
     private var connection: NWConnection?
     private var parameters: NWParameters?
@@ -24,7 +24,7 @@ public final class WhiteTipped {
     public init(
         headers: [String: String]?,
         urlRequest: URLRequest?,
-        cookies: HTTPCookie
+        cookies: HTTPCookie?
     ) {
         self.headers = headers
         self.urlRequest = urlRequest
