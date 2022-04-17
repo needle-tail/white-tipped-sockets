@@ -5,9 +5,9 @@ import OSLog
 public final class WhiteTipped {
     
     
-   public var recievedText: String?
-   public var recievedBinary: Data?
-   public var receviedPong: Data?
+    public var recievedText: String?
+    public var recievedBinary: Data?
+    public var receviedPong: Data?
     
     public var headers: [String: String]?
     public var urlRequest: URLRequest?
@@ -19,7 +19,7 @@ public final class WhiteTipped {
     private var logger: Logger
     private var consumer = ListenerConsumer()
     
-
+    
     
     public init(
         headers: [String: String]?,
@@ -39,7 +39,8 @@ public final class WhiteTipped {
         endpoint = .url(url)
         parameters = url.scheme == "ws" ? .tcp : .tls
         let options = NWProtocolWebSocket.Options()
-        
+        options.autoReplyPing = true
+        options.maximumMessageSize = 1_000_000 * 16
         
         if urlRequest != nil {
             options.setAdditionalHeaders(urlRequest?.allHTTPHeaderFields?.map { ($0.key, $0.value) } ?? [])
@@ -50,8 +51,14 @@ public final class WhiteTipped {
         parameters?.defaultProtocolStack.applicationProtocols.insert(options, at: 0)
         guard let endpoint = endpoint else { return }
         guard let parameters = parameters else { return }
-
+        
         connection = NWConnection(to: endpoint, using: parameters)
+        do {
+        try await channelRead()
+        } catch {
+            print(error)
+        }
+        connection?.start(queue: .global())
         await monitorConnection()
     }
     
@@ -60,8 +67,7 @@ public final class WhiteTipped {
         var context: NWConnection.ContentContext
     }
     
-    private func listen() async throws {
-        
+    private func channelRead() async throws {
         let result = try await withCheckedThrowingContinuation({ (continuation: CheckedContinuation<Listener, Error>) in
             connection?.receiveMessage(completion: { completeContent, contentContext, isComplete, error in
                 if let error = error {
@@ -110,13 +116,12 @@ public final class WhiteTipped {
             }
         case .close:
             //TODO: Write close logic
-        break
+            break
         case .ping:
             //Auto Reply
-        break
+            break
         case .pong:
-            //TODO: Write pong logic
-        break
+            await ping(interval: 100*60)
         @unknown default:
             fatalError()
         }
@@ -124,30 +129,43 @@ public final class WhiteTipped {
     }
     
     
+    public func disconnect(code: NWProtocolWebSocket.CloseCode = .protocolCode(.normalClosure)) async {
+        if code == .protocolCode(.normalClosure) {
+            connection?.cancel()
+            //report closing
+        } else {
+            let metadata = NWProtocolWebSocket.Metadata(opcode: .close)
+            metadata.closeCode = code
+            let context = NWConnection.ContentContext(identifier: "close", metadata: [metadata])
+            await send(data: nil, context: context)
+        }
+    }
+    
+    
     private func monitorConnection() async  {
         let state = await asyncMonitorConnection()
-            switch state {
-            case .setup:
-                logger.info("Connection setup")
-            case .waiting(let status):
-                logger.info("Connection waiting with status - Status: \(status.localizedDescription)")
-            case .preparing:
-                logger.info("Connection preparing")
-            case .ready:
-                logger.info("Connection established")
-                
-                //TODO: Setup app
-            case .failed(let error):
-                logger.info("Connection failed with error - Error: \(error.localizedDescription)")
-                connection?.cancel()
-                
-                //TODO: Notify app that the connection failed
-            case .cancelled:
-                logger.info("Connection cancelled")
-            default:
-                break
-            }
-
+        switch state {
+        case .setup:
+            logger.info("Connection setup")
+        case .waiting(let status):
+            logger.info("Connection waiting with status - Status: \(status.localizedDescription)")
+        case .preparing:
+            logger.info("Connection preparing")
+        case .ready:
+            logger.info("Connection established")
+            
+            //TODO: Setup app
+        case .failed(let error):
+            logger.info("Connection failed with error - Error: \(error.localizedDescription)")
+            connection?.cancel()
+            
+            //TODO: Notify app that the connection failed
+        case .cancelled:
+            logger.info("Connection cancelled")
+        default:
+            break
+        }
+        
         connection?.start(queue: DispatchQueue(label: "WhiteTipped"))
         
         do {
@@ -192,24 +210,80 @@ public final class WhiteTipped {
     }
     
     
-    
-    public func disconnect() {
-        
+    func sendText(_ text: String) async {
+        guard let data = text.data(using: .utf8) else { return }
+        let metadata = NWProtocolWebSocket.Metadata(opcode: .text)
+        let context = NWConnection.ContentContext(identifier: "text", metadata: [metadata])
+        await send(data: data, context: context)
     }
     
-    
-    func sendText() {
-        
-        
+    func sendBinary(_ data: Data) async {
+        let metadata = NWProtocolWebSocket.Metadata(opcode: .binary)
+        let context = NWConnection.ContentContext(identifier: "text", metadata: [metadata])
+        await send(data: data, context: context)
     }
     
-    func sendBinary() {
-        
+    private func ping(interval: TimeInterval) async {
+        let date = RunLoop.timeInterval(interval)
+        while await RunLoop.execute(date, canRun: true) {
+            await sendPing()
+            try? await Task.sleep(nanoseconds: NSEC_PER_SEC)
+        }
     }
     
-    func sendPing() {
+    func sendPing() async {
+        let metadata = NWProtocolWebSocket.Metadata(opcode: .ping)
+        do {
+            try await pongHandler(metadata)
+            let context = NWConnection.ContentContext(
+                identifier: "ping",
+                metadata: [metadata]
+            )
+            await send(data: "ping".data(using: .utf8), context: context)
+        } catch {
+            print(error)
+        }
+    }
+        
+        func pongHandler(_ metadata: NWProtocolWebSocket.Metadata) async throws -> Void{
+            return try await withCheckedThrowingContinuation({ (continuation: CheckedContinuation<Void, Error>) in
+                metadata.setPongHandler(.global()) { error in
+                    if let error = error {
+                        continuation.resume(throwing: error)
+                    } else {
+                        continuation.resume(returning: ())
+                    }
+                }
+            })
+        }
+        
+        
+        func send(data: Data?, context: NWConnection.ContentContext) async {
+            do {
+                try await sendAsync(data: data, context: context)
+                guard let metadata = context.protocolMetadata.first as? NWProtocolWebSocket.Metadata else { return }
+                guard (metadata.opcode == .close) else { return }
+                //TODO: Notify websocket closed
+                
+            } catch {
+                print(error)
+            }
+        }
+        
+        func sendAsync(data: Data?, context: NWConnection.ContentContext) async throws -> Void {
+            return try await withCheckedThrowingContinuation({ (continuation: CheckedContinuation<Void, Error>) in
+                connection?.send(
+                    content: data,
+                    contentContext: context,
+                    isComplete: true,
+                    completion: .contentProcessed({ error in
+                        if let error = error {
+                            continuation.resume(throwing: error)
+                        } else {
+                            continuation.resume(returning: ())
+                        }
+                    }))
+            })
+        }
         
     }
-    
-    
-}
