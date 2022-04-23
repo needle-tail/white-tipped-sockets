@@ -18,7 +18,7 @@ public final class WhiteTipped {
     private var endpoint: NWEndpoint?
     private var logger: Logger
     private var consumer = ListenerConsumer()
-    
+    private var stateConsumer = StateConsumer()
     
     
     public init(
@@ -53,12 +53,13 @@ public final class WhiteTipped {
         guard let parameters = parameters else { return }
         
         connection = NWConnection(to: endpoint, using: parameters)
-        connection?.start(queue: .global())
-        do {
-        try await channelRead()
-        } catch {
-            print(error)
+        connection?.start(queue: DispatchQueue(label: "WTK"))
+        
+        connection?.stateUpdateHandler = { [weak self] state in
+            guard let strongSelf = self else {return}
+            strongSelf.stateConsumer.queue.enqueue(state)
         }
+        
         await monitorConnection()
     }
     
@@ -67,65 +68,56 @@ public final class WhiteTipped {
         var context: NWConnection.ContentContext
     }
     
-    private func channelRead() async throws {
-        let result = try await withCheckedThrowingContinuation({ (continuation: CheckedContinuation<Listener, Error>) in
-            connection?.receiveMessage(completion: { completeContent, contentContext, isComplete, error in
-                if let error = error {
-                    continuation.resume(throwing: error)
-                } else {
-                    guard let contentContext = contentContext else { return }
-                    guard let completeContent = completeContent else { return }
-                    continuation.resume(returning: Listener(data: completeContent, context: contentContext))
-                }
-            })
+    
+    private func receiveAndFeed() throws {
+        connection?.receiveMessage(completion: { completeContent, contentContext, isComplete, error in
+            let listener = ListenerStruct(data: completeContent, context: contentContext, isComplete: isComplete)
+            self.consumer.feedConsumer(listener)
         })
         
-        guard let metadata = result.context.protocolMetadata.first as? NWProtocolWebSocket.Metadata else { return }
-        
-        switch metadata.opcode {
-        case .cont:
-            break
-        case .text:
-            //We want to ensure order asynchronously, so we queue our frames in a sequence
-            await consumer.feedConsumer([result.data])
-            
-            for try await result in ListenerSequence(consumer: consumer) {
-                switch result {
-                case .success(let text):
-                    recievedText = String(data: text, encoding: .utf8)
-                case .retry:
-                    break
-                case .finished:
-                    return
-                }
-            }
-            
-        case .binary:
-            //We want to ensure order asynchronously, so we queue our frames in a sequence
-            await consumer.feedConsumer([result.data])
-            
-            for try await result in ListenerSequence(consumer: consumer) {
-                switch result {
-                case .success(let data):
-                    recievedBinary = data
-                case .retry:
-                    break
-                case .finished:
-                    return
-                }
-            }
-        case .close:
-            //TODO: Write close logic
-            break
-        case .ping:
-            //Auto Reply
-            break
-        case .pong:
-            await ping(interval: 100*60)
-        @unknown default:
-            fatalError()
+        Task {
+           try await channelRead()
         }
-        
+    }
+    
+    private func channelRead() async throws {
+        do {
+            for try await result in ListenerSequence(consumer: consumer) {
+                
+                switch result {
+                case .success(let listener):
+                    guard let metadata = listener.context?.protocolMetadata.first as? NWProtocolWebSocket.Metadata else { return }
+                    
+                    switch metadata.opcode {
+                    case .cont:
+                        return
+                    case .text:
+                        guard let data = listener.data else { return }
+                        recievedText = String(data: data, encoding: .utf8)
+                    case .binary:
+                        guard let data = listener.data else { return }
+                        recievedBinary = data
+                    case .close:
+                        //TODO: Write close logic
+                        return
+                    case .ping:
+                        //Auto Reply
+                        return
+                    case .pong:
+                        await ping(interval: 100*60)
+                    @unknown default:
+                        fatalError()
+                    }
+                case .finished:
+                    return
+                case .retry:
+                    return
+                }
+                
+            }
+        } catch {
+            logger.error("\(error.localizedDescription)")
+        }
     }
     
     
@@ -141,57 +133,52 @@ public final class WhiteTipped {
         }
     }
     
-    
     private func monitorConnection() async  {
-        let state = await asyncMonitorConnection()
-        switch state {
-        case .setup:
-            logger.info("Connection setup")
-        case .waiting(let status):
-            logger.info("Connection waiting with status - Status: \(status.localizedDescription)")
-        case .preparing:
-            logger.info("Connection preparing")
-        case .ready:
-            logger.info("Connection established")
-            
-            //TODO: Setup app
-        case .failed(let error):
-            logger.info("Connection failed with error - Error: \(error.localizedDescription)")
-            connection?.cancel()
-            
-            //TODO: Notify app that the connection failed
-        case .cancelled:
-            logger.info("Connection cancelled")
-        default:
-            break
-        }
-        
-        connection?.start(queue: DispatchQueue(label: "WhiteTipped"))
-        
         do {
-            let content = try await receiveOnConnection()
+            for try await result in StateSequence(consumer: stateConsumer) {
+                switch result {
+                case .succes(let state):
+                    switch state {
+                    case .setup:
+                        logger.info("Connection setup")
+                    case .waiting(let status):
+                        logger.info("Connection waiting with status - Status: \(status.localizedDescription)")
+                    case .preparing:
+                        logger.info("Connection preparing")
+                    case .ready:
+                        logger.info("Connection established")
+                        try receiveAndFeed()
+                    case .failed(let error):
+                        logger.info("Connection failed with error - Error: \(error.localizedDescription)")
+                        connection?.cancel()
+                        
+                        //TODO: Notify app that the connection failed
+                    case .cancelled:
+                        logger.info("Connection cancelled")
+                    default:
+                       return
+                    }
+                case .fail:
+                    //Tear Down
+                   return
+                }
+            }
+            guard let content = try await receiveOnConnection() else { return }
             logger.info("received Data on connection - Data: \(String(content.count))")
-            //TODO: Notify App Data recieved
         } catch {
             print(error)
         }
     }
+
     
-    private func asyncMonitorConnection() async -> NWConnection.State {
-        return await withCheckedContinuation { (continuation: CheckedContinuation<NWConnection.State, Never>) in
-            connection?.stateUpdateHandler = { state in
-                continuation.resume(returning: state)
-            }
-        }
-    }
-    
-    private func receiveOnConnection() async throws -> Data {
-        return try await withCheckedThrowingContinuation({ (continuation: CheckedContinuation<Data, Error>) in
+    private func receiveOnConnection() async throws -> Data? {
+        return try await withCheckedThrowingContinuation({ (continuation: CheckedContinuation<Data?, Error>) in
             connection?.receive(minimumIncompleteLength: 1, maximumLength: 437358) { content, contentContext, isComplete, error in
-                if let content = content {
-                    continuation.resume(returning: content)
+                if let error = error {
+                    
+                    continuation.resume(throwing: error)
                 } else {
-                    continuation.resume(throwing: error!)
+                    continuation.resume(returning: content)
                 }
             }
         })
@@ -210,20 +197,20 @@ public final class WhiteTipped {
     }
     
     
-    func sendText(_ text: String) async {
+    public func sendText(_ text: String) async {
         guard let data = text.data(using: .utf8) else { return }
         let metadata = NWProtocolWebSocket.Metadata(opcode: .text)
         let context = NWConnection.ContentContext(identifier: "text", metadata: [metadata])
         await send(data: data, context: context)
     }
     
-    func sendBinary(_ data: Data) async {
+    public func sendBinary(_ data: Data) async {
         let metadata = NWProtocolWebSocket.Metadata(opcode: .binary)
         let context = NWConnection.ContentContext(identifier: "text", metadata: [metadata])
         await send(data: data, context: context)
     }
     
-    private func ping(interval: TimeInterval) async {
+    public func ping(interval: TimeInterval) async {
         let date = RunLoop.timeInterval(interval)
         while await RunLoop.execute(date, canRun: true) {
             await sendPing()
@@ -244,46 +231,46 @@ public final class WhiteTipped {
             print(error)
         }
     }
-        
-        func pongHandler(_ metadata: NWProtocolWebSocket.Metadata) async throws -> Void{
-            return try await withCheckedThrowingContinuation({ (continuation: CheckedContinuation<Void, Error>) in
-                metadata.setPongHandler(.global()) { error in
+    
+    func pongHandler(_ metadata: NWProtocolWebSocket.Metadata) async throws -> Void{
+        return try await withCheckedThrowingContinuation({ (continuation: CheckedContinuation<Void, Error>) in
+            metadata.setPongHandler(.global()) { error in
+                if let error = error {
+                    continuation.resume(throwing: error)
+                } else {
+                    continuation.resume(returning: ())
+                }
+            }
+        })
+    }
+    
+    
+    func send(data: Data?, context: NWConnection.ContentContext) async {
+        do {
+            try await sendAsync(data: data, context: context)
+//            guard let metadata = context.protocolMetadata.first as? NWProtocolWebSocket.Metadata else { return }
+//            guard (metadata.opcode == .close) else { return }
+            //TODO: Notify websocket closed
+            
+        } catch {
+            print(error)
+        }
+    }
+    
+    func sendAsync(data: Data?, context: NWConnection.ContentContext) async throws -> Void {
+        return try await withCheckedThrowingContinuation({ (continuation: CheckedContinuation<Void, Error>) in
+            connection?.send(
+                content: data,
+                contentContext: context,
+                isComplete: true,
+                completion: .contentProcessed({ error in
                     if let error = error {
                         continuation.resume(throwing: error)
                     } else {
                         continuation.resume(returning: ())
                     }
-                }
-            })
-        }
-        
-        
-        func send(data: Data?, context: NWConnection.ContentContext) async {
-            do {
-                try await sendAsync(data: data, context: context)
-                guard let metadata = context.protocolMetadata.first as? NWProtocolWebSocket.Metadata else { return }
-                guard (metadata.opcode == .close) else { return }
-                //TODO: Notify websocket closed
-                
-            } catch {
-                print(error)
-            }
-        }
-        
-        func sendAsync(data: Data?, context: NWConnection.ContentContext) async throws -> Void {
-            return try await withCheckedThrowingContinuation({ (continuation: CheckedContinuation<Void, Error>) in
-                connection?.send(
-                    content: data,
-                    contentContext: context,
-                    isComplete: true,
-                    completion: .contentProcessed({ error in
-                        if let error = error {
-                            continuation.resume(throwing: error)
-                        } else {
-                            continuation.resume(returning: ())
-                        }
-                    }))
-            })
-        }
-        
+                }))
+        })
     }
+    
+}

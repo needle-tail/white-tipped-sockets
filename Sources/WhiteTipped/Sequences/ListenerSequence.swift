@@ -58,11 +58,17 @@ public enum ConsumedState {
 }
 
 public enum SequenceResult {
-    case success(Data), retry, finished
+    case success(ListenerStruct), retry, finished
 }
 
-enum NextResult {
-    case ready(Data) , preparing, finished
+public enum NextResult {
+    case ready(ListenerStruct) , preparing, finished
+}
+
+public struct ListenerStruct {
+    var data: Data?
+    var context: NWConnection.ContentContext?
+    var isComplete: Bool
 }
 
 public var consumedState = ConsumedState.consumed
@@ -71,21 +77,21 @@ var nextResult = NextResult.preparing
 
 public final class ListenerConsumer {
     
-    internal var wb = ListenerStack<Data>()
+    internal var queue = ListenerStack<ListenerStruct>()
     
     public init() {}
     
     
-    public func feedConsumer(_ conversation: [Data]) async {
-        wb.enqueue(conversation)
+    public func feedConsumer(_ conversation: ListenerStruct) {
+        queue.enqueue(conversation)
     }
     
     func next() -> NextResult {
         switch dequeuedConsumedState {
         case .consumed:
             consumedState = .waiting
-            guard let message = wb.dequeue() else { return .finished }
-            return .ready(message)
+            guard let listener = queue.dequeue() else { return .finished }
+            return .ready(listener)
         case .waiting:
             return .preparing
         }
@@ -94,7 +100,7 @@ public final class ListenerConsumer {
 
 protocol ListenerQueue {
     associatedtype Element
-    mutating func enqueue(_ elements: [Element])
+    mutating func enqueue(_ element: Element)
     mutating func dequeue() -> Element?
     var isEmpty: Bool { get }
     var peek: Element? { get }
@@ -115,17 +121,17 @@ struct ListenerStack<T>: ListenerQueue {
     }
     
     
-    mutating func enqueue(_ elements: [T]) {
+    mutating func enqueue(_ element: T) {
         //If stack is empty we want to set the array to the enqueue stack
         if enqueueStack.isEmpty {
             dequeueStack = enqueueStack
         }
         //Then we append the element
-        enqueueStack.append(contentsOf: elements)
+        enqueueStack.append(element)
     }
     
     
-    @discardableResult
+//    @discardableResult
     mutating func dequeue() -> T? {
         
         if dequeueStack.isEmpty {
