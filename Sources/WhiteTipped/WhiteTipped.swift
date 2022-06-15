@@ -234,10 +234,10 @@ public final class WhiteTipped: WhiteTippedSocket {
                         return
                     case .ping:
                         logger.trace("Received ping WebSocketFrame")
-                        break
+                        return
                     case .pong:
                         logger.trace("Received pong WebSocketFrame")
-                        break
+                        return
                     @unknown default:
                         fatalError("FATAL ERROR")
                     }
