@@ -14,16 +14,26 @@ public class WhiteTippedReciever {
 }
 
 public struct DisconnectResult {
-   public var error: NWError?
-   public var code: NWProtocolWebSocket.CloseCode
+    public var error: NWError?
+    public var code: NWProtocolWebSocket.CloseCode
 }
 
 public struct ConnectResult {
-   public var betterPath: Bool?
-   public var ViablePath: Bool?
+    public var betterPath: Bool?
+    public var ViablePath: Bool?
 }
 
-public final class WhiteTipped {
+public protocol WhiteTippedSocket: AnyObject {
+    var connectionStatus: Bool { get set }
+    var recievedText: String { get set }
+    var recievedBinary: Data { get set }
+    var receviedPong: Data { get set }
+    var receivedDisconnection: DisconnectResult? { get set }
+    var betterPath: Bool { get set }
+    var viablePath: Bool { get set }
+}
+
+public final class WhiteTipped: WhiteTippedSocket {
     
     public var connectionStatus: Bool = false {
         didSet {
@@ -105,15 +115,18 @@ public final class WhiteTipped {
     private var logger: Logger
     private var consumer = ListenerConsumer()
     public var receiver: WhiteTippedReciever
+    weak var delegate: WhiteTippedSocket?
     
     public init(
         headers: [String: String]?,
         urlRequest: URLRequest?,
-        cookies: HTTPCookie?
+        cookies: HTTPCookie?,
+        delegate: WhiteTippedSocket?
     ) {
         self.headers = headers
         self.urlRequest = urlRequest
         self.cookies = cookies
+        self.delegate = delegate
         logger = Logger(subsystem: "WhiteTipped", category: "NWConnection")
         self.receiver = WhiteTippedReciever()
     }
@@ -207,10 +220,12 @@ public final class WhiteTipped {
                         logger.trace("Received text WebSocketFrame")
                         guard let data = listener.data else { return }
                         guard let text = String(data: data, encoding: .utf8) else { return }
+                        delegate?.recievedText = text
                         recievedText = text
                     case .binary:
                         logger.trace("Received binary WebSocketFrame")
                         guard let data = listener.data else { return }
+                        delegate?.recievedBinary = data
                         recievedBinary = data
                     case .close:
                         logger.trace("Received close WebSocketFrame")
@@ -228,7 +243,7 @@ public final class WhiteTipped {
                     }
                 case .finished:
                     logger.trace("Finished")
-                   return
+                    return
                 case .retry:
                     logger.trace("Will retry")
                     return
@@ -273,23 +288,26 @@ public final class WhiteTipped {
                     logger.trace("Connection established")
                     print(betterPath)
                     if betterPath == true {
-                    logger.trace("We found a better path")
-                    self.connection = nil
-                    guard let endpoint = endpoint else { return }
-                    guard let parameters = parameters else { return }
-                    let migratedConnection = NWConnection(to: endpoint, using: parameters)
-                    migratedConnection.start(queue: nwQueue)
-                    pathHandlers()
-                    self.connection = migratedConnection
+                        logger.trace("We found a better path")
+                        self.connection = nil
+                        guard let endpoint = endpoint else { return }
+                        guard let parameters = parameters else { return }
+                        let migratedConnection = NWConnection(to: endpoint, using: parameters)
+                        migratedConnection.start(queue: nwQueue)
+                        pathHandlers()
+                        self.connection = migratedConnection
                     }
                     try receiveAndFeed()
+                    delegate?.connectionStatus = true
                 case .failed(let error):
                     logger.trace("Connection failed with error - Error: \(error.localizedDescription)")
                     connection?.cancel()
                     await notifyDisconnection(with: error, .protocolCode(.abnormalClosure))
+                    delegate?.connectionStatus = false
                 case .cancelled:
                     logger.trace("Connection cancelled")
                     await notifyDisconnection(.protocolCode(.normalClosure))
+                    delegate?.connectionStatus = false
                 default:
                     logger.trace("Connection default")
                     return
@@ -304,9 +322,11 @@ public final class WhiteTipped {
         for await result in connectionState.$betterPath.values {
             switch result {
             case true:
+                delegate?.betterPath = true
                 betterPath = true
                 await monitorConnection(true)
             case false:
+                delegate?.betterPath = false
                 betterPath = false
             }
         }
@@ -316,8 +336,10 @@ public final class WhiteTipped {
         for await result in connectionState.$viablePath.values {
             switch result {
             case true:
+                delegate?.viablePath = false
                 viablePath = true
             case false:
+                delegate?.viablePath = false
                 viablePath = false
             }
         }
@@ -346,23 +368,23 @@ public final class WhiteTipped {
     
     func sendPing() async {
         let metadata = NWProtocolWebSocket.Metadata(opcode: .ping)
-            pongHandler(metadata)
-            let context = NWConnection.ContentContext(
-                identifier: "ping",
-                metadata: [metadata]
-            )
-            await send(data: "ping".data(using: .utf8), context: context)
+        pongHandler(metadata)
+        let context = NWConnection.ContentContext(
+            identifier: "ping",
+            metadata: [metadata]
+        )
+        await send(data: "ping".data(using: .utf8), context: context)
     }
     
     func pongHandler(_ metadata: NWProtocolWebSocket.Metadata) {
-            metadata.setPongHandler(nwQueue) { [weak self] error in
-                guard let strongSelf = self else { return }
-                if let error = error {
-                    strongSelf.logger.error("Error: \(error.debugDescription)")
-                } else {
-                    strongSelf.logger.trace("NO ERROR")
-                }
+        metadata.setPongHandler(nwQueue) { [weak self] error in
+            guard let strongSelf = self else { return }
+            if let error = error {
+                strongSelf.logger.error("Error: \(error.debugDescription)")
+            } else {
+                strongSelf.logger.trace("NO ERROR")
             }
+        }
     }
     
     
