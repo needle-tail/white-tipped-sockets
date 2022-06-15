@@ -25,7 +25,7 @@ public struct ConnectResult {
 
 public final class WhiteTipped {
     
-    public var connectionStatus: Bool {
+    public var connectionStatus: Bool = false {
         didSet {
             guard let status = connection?.state else { return }
             if status == .ready {
