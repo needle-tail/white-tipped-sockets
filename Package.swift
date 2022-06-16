@@ -22,8 +22,8 @@ let package = Package(
         .target(
             name: "WhiteTipped",
             dependencies: []),
-//        .testTarget(
-//            name: "WhiteTippedTests",
-//            dependencies: ["white-tipped-sockets"]),
+        .testTarget(
+            name: "WhiteTippedTests",
+            dependencies: ["WhiteTipped"]),
     ]
 )

@@ -11,6 +11,7 @@ public class WhiteTippedReciever {
     public let disconnectionPacketReceived = PassthroughSubject<DisconnectResult, Never>()
     public let betterPathReceived = PassthroughSubject<Bool, Never>()
     public let viablePathReceived = PassthroughSubject<Bool, Never>()
+    public let connectionStatus = PassthroughSubject<Bool, Never>()
 }
 
 public struct DisconnectResult {
@@ -23,115 +24,35 @@ public struct ConnectResult {
     public var ViablePath: Bool?
 }
 
-public protocol WhiteTippedSocket: AnyObject {
-    var connectionStatus: Bool { get set }
-    var recievedText: String { get set }
-    var recievedBinary: Data { get set }
-    var receviedPong: Data { get set }
-    var receivedDisconnection: DisconnectResult? { get set }
-    var betterPath: Bool { get set }
-    var viablePath: Bool { get set }
-}
 
-public final class WhiteTipped: WhiteTippedSocket {
-    
-    public var connectionStatus: Bool = false {
-        didSet {
-            guard let status = connection?.state else { return }
-            if status == .ready {
-                connectionStatus = true
-            } else {
-                connectionStatus = false
-            }
-        }
-    }
-    
-    public var recievedText: String = "" {
-        didSet {
-            Task {
-                await MainActor.run {
-                    receiver.textReceived.send(recievedText)
-                }
-            }
-        }
-    }
-    public var recievedBinary: Data = Data() {
-        didSet {
-            Task {
-                await MainActor.run {
-                    receiver.binaryReceived.send(recievedBinary)
-                }
-            }
-        }
-    }
-    public var receviedPong: Data = Data() {
-        didSet {
-            Task {
-                await MainActor.run {
-                    receiver.pongReceived.send(receviedPong)
-                }
-            }
-        }
-    }
-    
-    public var receivedDisconnection: DisconnectResult? {
-        didSet {
-            Task {
-                await MainActor.run {
-                    guard let result = receivedDisconnection else { return }
-                    receiver.disconnectionPacketReceived.send(result)
-                }
-            }
-        }
-    }
-    
-    public var betterPath: Bool = false {
-        didSet {
-            Task {
-                await MainActor.run {
-                    receiver.betterPathReceived.send(betterPath)
-                }
-            }
-        }
-    }
-    
-    public var viablePath: Bool = false {
-        didSet {
-            Task {
-                await MainActor.run {
-                    receiver.viablePathReceived.send(viablePath)
-                }
-            }
-        }
-    }
+public final actor WhiteTipped {
     
     public var headers: [String: String]?
     public var urlRequest: URLRequest?
     public var cookies: HTTPCookie?
-    
+    private var canRun: Bool = true
     private var connection: NWConnection?
     private var parameters: NWParameters?
     private var endpoint: NWEndpoint?
-    private var logger: Logger
+    private let logger: Logger
     private var consumer = ListenerConsumer()
-    public var receiver: WhiteTippedReciever
-    weak var delegate: WhiteTippedSocket?
+    @MainActor public var receiver = WhiteTippedReciever()
+    
     
     public init(
         headers: [String: String]?,
         urlRequest: URLRequest?,
-        cookies: HTTPCookie?,
-        delegate: WhiteTippedSocket?
-    ) {
+        cookies: HTTPCookie?
+    ) async {
         self.headers = headers
         self.urlRequest = urlRequest
         self.cookies = cookies
-        self.delegate = delegate
         logger = Logger(subsystem: "WhiteTipped", category: "NWConnection")
-        self.receiver = WhiteTippedReciever()
     }
+    
+    
     var nwQueue = DispatchQueue(label: "WTK")
-    @objc var connectionState = NWConnectionState()
+    let connectionState = NWConnectionState()
     var stateCancellable: Cancellable?
     var betterPathCancellable: Cancellable?
     var viablePatheCancellable: Cancellable?
@@ -142,8 +63,13 @@ public final class WhiteTipped: WhiteTippedSocket {
         viablePatheCancellable = nil
     }
     
+    func fireAfterConnection() {
+        print("We will never see this message why???")
+    }
+    
+    
     public func connect(url: URL) async {
-        
+        canRun = true
         endpoint = .url(url)
         parameters = url.scheme == "ws" ? .tcp : .tls
         let options = NWProtocolWebSocket.Options()
@@ -162,26 +88,27 @@ public final class WhiteTipped: WhiteTippedSocket {
         
         connection = NWConnection(to: endpoint, using: parameters)
         connection?.start(queue: nwQueue)
-        pathHandlers()
+        await pathHandlers()
         
         await monitorConnection()
         await betterPath()
         await viablePath()
     }
     
-    private func pathHandlers() {
+    
+    private func pathHandlers() async {
         stateCancellable = connectionState.publisher(for: \.currentState) as? Cancellable
         connection?.stateUpdateHandler = { [weak self] state in
             guard let strongSelf = self else {return}
             strongSelf.connectionState.currentState = state
         }
-        
+
         betterPathCancellable = connectionState.publisher(for: \.betterPath) as? Cancellable
         connection?.betterPathUpdateHandler = { [weak self] value in
             guard let strongSelf = self else {return}
             strongSelf.connectionState.betterPath = value
         }
-        
+
         viablePatheCancellable = connectionState.publisher(for: \.viablePath) as? Cancellable
         connection?.viabilityUpdateHandler = { [weak self] value in
             guard let strongSelf = self else {return}
@@ -193,6 +120,7 @@ public final class WhiteTipped: WhiteTippedSocket {
         var data: Data
         var context: NWConnection.ContentContext
     }
+    
     
     private func receiveAndFeed() throws {
         connection?.receiveMessage(completion: { completeContent, contentContext, isComplete, error in
@@ -206,6 +134,7 @@ public final class WhiteTipped: WhiteTippedSocket {
         })
     }
     
+    
     private func channelRead() async throws {
         do {
             for try await result in ListenerSequence(consumer: consumer) {
@@ -215,18 +144,20 @@ public final class WhiteTipped: WhiteTippedSocket {
                     switch metadata.opcode {
                     case .cont:
                         logger.trace("Received continuous WebSocketFrame")
-                        return
+                        break
                     case .text:
                         logger.trace("Received text WebSocketFrame")
                         guard let data = listener.data else { return }
                         guard let text = String(data: data, encoding: .utf8) else { return }
-                        delegate?.recievedText = text
-                        recievedText = text
+                        await MainActor.run {
+                            receiver.textReceived.send(text)
+                        }
                     case .binary:
                         logger.trace("Received binary WebSocketFrame")
                         guard let data = listener.data else { return }
-                        delegate?.recievedBinary = data
-                        recievedBinary = data
+                        await MainActor.run {
+                            receiver.binaryReceived.send(data)
+                        }
                     case .close:
                         logger.trace("Received close WebSocketFrame")
                         connection?.cancel()
@@ -234,10 +165,10 @@ public final class WhiteTipped: WhiteTippedSocket {
                         return
                     case .ping:
                         logger.trace("Received ping WebSocketFrame")
-                        return
+                        break
                     case .pong:
                         logger.trace("Received pong WebSocketFrame")
-                        return
+                        break
                     @unknown default:
                         fatalError("FATAL ERROR")
                     }
@@ -257,6 +188,7 @@ public final class WhiteTipped: WhiteTippedSocket {
     
     
     public func disconnect(code: NWProtocolWebSocket.CloseCode = .protocolCode(.normalClosure)) async {
+        canRun = false
         if code == .protocolCode(.normalClosure) {
             connection?.cancel()
             await notifyDisconnection(code)
@@ -271,19 +203,27 @@ public final class WhiteTipped: WhiteTippedSocket {
     
     
     func notifyDisconnection(with error: NWError? = nil, _ reason: NWProtocolWebSocket.CloseCode) async {
-        receivedDisconnection = DisconnectResult(error: error, code: reason)
+        let result = DisconnectResult(error: error, code: reason)
+        await MainActor.run {
+            receiver.disconnectionPacketReceived.send(result)
+        }
     }
+    
     
     private func monitorConnection(_ betterPath: Bool = false) async  {
         do {
+            //AsyncPublish prevents currentState from finishing the suspension
             for await state in connectionState.$currentState.values {
                 switch state {
                 case .setup:
                     logger.trace("Connection setup")
+                    
                 case .waiting(let status):
                     logger.trace("Connection waiting with status - Status: \(status.localizedDescription)")
+                    
                 case .preparing:
                     logger.trace("Connection preparing")
+                    
                 case .ready:
                     logger.trace("Connection established")
                     print(betterPath)
@@ -292,58 +232,57 @@ public final class WhiteTipped: WhiteTippedSocket {
                         self.connection = nil
                         guard let endpoint = endpoint else { return }
                         guard let parameters = parameters else { return }
-                        let migratedConnection = NWConnection(to: endpoint, using: parameters)
-                        migratedConnection.start(queue: nwQueue)
-                        pathHandlers()
-                        self.connection = migratedConnection
+                        let newConnection = NWConnection(to: endpoint, using: parameters)
+                        newConnection.start(queue: nwQueue)
+                        await pathHandlers()
+                        self.connection = newConnection
                     }
                     try receiveAndFeed()
-                    delegate?.connectionStatus = true
+                    await MainActor.run {
+                        receiver.connectionStatus.send(true)
+                    }
                 case .failed(let error):
                     logger.trace("Connection failed with error - Error: \(error.localizedDescription)")
                     connection?.cancel()
                     await notifyDisconnection(with: error, .protocolCode(.abnormalClosure))
-                    delegate?.connectionStatus = false
+                    await MainActor.run {
+                        receiver.connectionStatus.send(false)
+                    }
                 case .cancelled:
                     logger.trace("Connection cancelled")
                     await notifyDisconnection(.protocolCode(.normalClosure))
-                    delegate?.connectionStatus = false
+                    await MainActor.run {
+                        receiver.connectionStatus.send(false)
+                    }
                 default:
                     logger.trace("Connection default")
                     return
                 }
             }
+            
         } catch {
             logger.error("State Error: \(error.localizedDescription)")
         }
     }
     
+    
     private func betterPath() async {
         for await result in connectionState.$betterPath.values {
-            switch result {
-            case true:
-                delegate?.betterPath = true
-                betterPath = true
-                await monitorConnection(true)
-            case false:
-                delegate?.betterPath = false
-                betterPath = false
+            await MainActor.run {
+                receiver.betterPathReceived.send(result)
             }
         }
     }
     
+    
     private func viablePath() async {
         for await result in connectionState.$viablePath.values {
-            switch result {
-            case true:
-                delegate?.viablePath = false
-                viablePath = true
-            case false:
-                delegate?.viablePath = false
-                viablePath = false
+            await MainActor.run {
+                receiver.viablePathReceived.send(result)
             }
         }
     }
+    
     
     public func sendText(_ text: String) async {
         guard let data = text.data(using: .utf8) else { return }
@@ -351,6 +290,7 @@ public final class WhiteTipped: WhiteTippedSocket {
         let context = NWConnection.ContentContext(identifier: "text", metadata: [metadata])
         await send(data: data, context: context)
     }
+    
     
     public func sendBinary(_ data: Data) async {
         let metadata = NWProtocolWebSocket.Metadata(opcode: .binary)
@@ -362,9 +302,12 @@ public final class WhiteTipped: WhiteTippedSocket {
         let date = RunLoop.timeInterval(interval)
         repeat {
             try? await Task.sleep(nanoseconds: NSEC_PER_SEC)
+            if canRun {
             await sendPing()
-        } while await RunLoop.execute(date, canRun: true)
+            }
+        } while await RunLoop.execute(date, canRun: canRun)
     }
+    
     
     func sendPing() async {
         let metadata = NWProtocolWebSocket.Metadata(opcode: .ping)
@@ -375,6 +318,7 @@ public final class WhiteTipped: WhiteTippedSocket {
         )
         await send(data: "ping".data(using: .utf8), context: context)
     }
+    
     
     func pongHandler(_ metadata: NWProtocolWebSocket.Metadata) {
         metadata.setPongHandler(nwQueue) { [weak self] error in
@@ -396,6 +340,7 @@ public final class WhiteTipped: WhiteTippedSocket {
             logger.error("Send Data Error: \(error.localizedDescription)")
         }
     }
+    
     
     func sendAsync(data: Data?, context: NWConnection.ContentContext) async throws -> Void {
         return try await withCheckedThrowingContinuation({ (continuation: CheckedContinuation<Void, Error>) in
