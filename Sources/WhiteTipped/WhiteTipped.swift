@@ -3,28 +3,6 @@ import Network
 import OSLog
 import Combine
 
-
-public class WhiteTippedReciever {
-    public let textReceived = PassthroughSubject<String, Never>()
-    public let binaryReceived = PassthroughSubject<Data, Never>()
-    public let pongReceived = PassthroughSubject<Data, Never>()
-    public let disconnectionPacketReceived = PassthroughSubject<DisconnectResult, Never>()
-    public let betterPathReceived = PassthroughSubject<Bool, Never>()
-    public let viablePathReceived = PassthroughSubject<Bool, Never>()
-    public let connectionStatus = PassthroughSubject<Bool, Never>()
-}
-
-public struct DisconnectResult {
-    public var error: NWError?
-    public var code: NWProtocolWebSocket.CloseCode
-}
-
-public struct ConnectResult {
-    public var betterPath: Bool?
-    public var ViablePath: Bool?
-}
-
-
 public final actor WhiteTipped {
     
     public var headers: [String: String]?
@@ -57,13 +35,7 @@ public final actor WhiteTipped {
     var betterPathCancellable: Cancellable?
     var viablePatheCancellable: Cancellable?
     
-    deinit {
-        stateCancellable = nil
-        betterPathCancellable = nil
-        viablePatheCancellable = nil
-    }
-    
-    func fireAfterConnection() {
+    public func fireAfterConnection() {
         print("We will never see this message why???")
     }
     
@@ -144,7 +116,7 @@ public final actor WhiteTipped {
                     switch metadata.opcode {
                     case .cont:
                         logger.trace("Received continuous WebSocketFrame")
-                        break
+                        return
                     case .text:
                         logger.trace("Received text WebSocketFrame")
                         guard let data = listener.data else { return }
@@ -152,12 +124,14 @@ public final actor WhiteTipped {
                         await MainActor.run {
                             receiver.textReceived.send(text)
                         }
+                        return
                     case .binary:
                         logger.trace("Received binary WebSocketFrame")
                         guard let data = listener.data else { return }
                         await MainActor.run {
                             receiver.binaryReceived.send(data)
                         }
+                        return
                     case .close:
                         logger.trace("Received close WebSocketFrame")
                         connection?.cancel()
@@ -165,12 +139,12 @@ public final actor WhiteTipped {
                         return
                     case .ping:
                         logger.trace("Received ping WebSocketFrame")
-                        break
+                        return
                     case .pong:
                         logger.trace("Received pong WebSocketFrame")
-                        break
+                        return
                     @unknown default:
-                        fatalError("FATAL ERROR")
+                        fatalError("Unkown State Case")
                     }
                 case .finished:
                     logger.trace("Finished")
@@ -199,6 +173,10 @@ public final actor WhiteTipped {
             let context = NWConnection.ContentContext(identifier: "close", metadata: [metadata])
             await send(data: nil, context: context)
         }
+        
+        stateCancellable = nil
+        betterPathCancellable = nil
+        viablePatheCancellable = nil
     }
     
     
@@ -217,13 +195,10 @@ public final actor WhiteTipped {
                 switch state {
                 case .setup:
                     logger.trace("Connection setup")
-                    
                 case .waiting(let status):
                     logger.trace("Connection waiting with status - Status: \(status.localizedDescription)")
-                    
                 case .preparing:
                     logger.trace("Connection preparing")
-                    
                 case .ready:
                     logger.trace("Connection established")
                     print(betterPath)
@@ -259,7 +234,6 @@ public final actor WhiteTipped {
                     return
                 }
             }
-            
         } catch {
             logger.error("State Error: \(error.localizedDescription)")
         }
@@ -325,8 +299,6 @@ public final actor WhiteTipped {
             guard let strongSelf = self else { return }
             if let error = error {
                 strongSelf.logger.error("Error: \(error.debugDescription)")
-            } else {
-                strongSelf.logger.trace("NO ERROR")
             }
         }
     }
@@ -357,11 +329,4 @@ public final actor WhiteTipped {
                 }))
         })
     }
-    
-}
-
-class NWConnectionState: NSObject, ObservableObject {
-    @Published var currentState: NWConnection.State = .preparing
-    @Published var betterPath: Bool = false
-    @Published var viablePath: Bool = false
 }
