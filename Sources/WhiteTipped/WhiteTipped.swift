@@ -12,7 +12,7 @@ public final actor WhiteTipped {
     private var connection: NWConnection?
     private var parameters: NWParameters?
     private var endpoint: NWEndpoint?
-    private let logger: Logger
+    let logger: Logger
     private var consumer = ListenerConsumer()
     @MainActor public var receiver = WhiteTippedReciever()
     
@@ -35,17 +35,14 @@ public final actor WhiteTipped {
     var betterPathCancellable: Cancellable?
     var viablePatheCancellable: Cancellable?
     
-    public func fireAfterConnection() {
-        print("We will never see this message why???")
-    }
     
-    
-    public func connect(url: URL) async {
+    public func connect(url: URL, trustAll: Bool, certificates: [String]?) async {
         canRun = true
         endpoint = .url(url)
-        parameters = url.scheme == "ws" ? .tcp : .tls
+
         let options = NWProtocolWebSocket.Options()
         options.autoReplyPing = true
+        //Limit Message size to 16MB to prevent abuse
         options.maximumMessageSize = 1_000_000 * 16
         
         if urlRequest != nil {
@@ -54,6 +51,12 @@ public final actor WhiteTipped {
         if headers != nil {
             options.setAdditionalHeaders(headers?.map { ($0.key, $0.value) } ?? [])
         }
+        if trustAll {
+            parameters = try? trustSelfSigned(nwQueue, certificates: certificates)
+        } else {
+            parameters = (url.scheme == "ws" ? .tcp : .tls)
+        }
+
         parameters?.defaultProtocolStack.applicationProtocols.insert(options, at: 0)
         guard let endpoint = endpoint else { return }
         guard let parameters = parameters else { return }
@@ -233,6 +236,8 @@ public final actor WhiteTipped {
                     logger.trace("Connection default")
                     return
                 }
+                
+                guard state != .setup, state != .preparing else { break }
             }
         } catch {
             logger.error("State Error: \(error.localizedDescription)")
@@ -245,6 +250,7 @@ public final actor WhiteTipped {
             await MainActor.run {
                 receiver.betterPathReceived.send(result)
             }
+            break
         }
     }
     
@@ -254,6 +260,7 @@ public final actor WhiteTipped {
             await MainActor.run {
                 receiver.viablePathReceived.send(result)
             }
+            break
         }
     }
     
