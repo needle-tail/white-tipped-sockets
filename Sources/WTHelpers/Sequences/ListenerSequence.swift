@@ -5,6 +5,7 @@
 //  Created by Cole M on 4/16/22.
 //
 
+#if canImport(Network)
 import Foundation
 
 public struct ListenerSequence: AsyncSequence {
@@ -155,3 +156,4 @@ public struct ListenerStack<T>: ListenerQueue {
         return dequeueStack.popLast()
     }
 }
+#endif

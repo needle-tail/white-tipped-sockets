@@ -18,7 +18,7 @@ public final class RunLoop {
     /// - Returns: The Date for the exectution to stop on
     public class func timeInterval(_ timeInterval: TimeInterval) -> Date {
         let timeInterval = TimeInterval(timeInterval)
-        let deadline = Date(timeIntervalSinceNow: Double(Double(NSEC_PER_SEC) * timeInterval) / Double(NSEC_PER_SEC)).timeIntervalSinceNow
+        let deadline = Date(timeIntervalSinceNow: Double(Double(1_000_000_000) * timeInterval) / Double(1_000_000_000)).timeIntervalSinceNow
         return Date(timeIntervalSinceNow: deadline)
     }
     
