@@ -14,6 +14,9 @@ let package = Package(
         .executable(
             name: "WhiteTippedServer",
             targets: ["WTServer"]),
+        .library(
+            name: "WhiteTippedNIOSockets",
+            targets: ["WTNIOSockets"]),
         .executable(
             name: "WhiteTippedNIOServer",
             targets: ["WTNIOServer"]),
@@ -26,6 +29,7 @@ let package = Package(
         // .package(url: /* package url */, from: "1.0.0"),
         .package(url: "https://github.com/apple/swift-nio.git", from: "2.40.0"),
         .package(url: "https://github.com/apple/swift-nio-ssl.git", from: "2.20.0"),
+        .package(url: "https://github.com/swiftpackages/DotEnv.git", from: "2.0.0")
     ],
     targets: [
         // Targets are the basic building blocks of a package. A target can define a module or a test suite.
@@ -36,16 +40,20 @@ let package = Package(
         .executableTarget(
             name: "WTServer",
             dependencies: ["WTHelpers"]),
-        .executableTarget(name: "WTNIOServer",
+        .target(name: "WTNIOSockets",
                dependencies: [
                 .product(name: "NIO", package: "swift-nio"),
                 .product(name: "NIOHTTP1", package: "swift-nio"),
                 .product(name: "NIOWebSocket", package: "swift-nio"),
-                .product(name: "NIOSSL", package: "swift-nio-ssl")
+                .product(name: "NIOSSL", package: "swift-nio-ssl"),
+                .product(name: "DotEnv", package: "DotEnv"),
                ]),
         .target(
             name: "WTHelpers",
             dependencies: []),
+        .executableTarget(
+            name: "WTNIOServer",
+            dependencies: ["WTNIOSockets"]),
         .testTarget(
             name: "WhiteTippedTests",
             dependencies: ["WhiteTipped", "WTHelpers"]),

@@ -4,8 +4,9 @@ import NIOWebSocket
 import NIOSSL
 import NIOPosix
 import Foundation
+import DotEnv
 
-class WTNIOServer {
+public class WTNIOServer {
     
     let port: Int
     let host: String
@@ -13,7 +14,7 @@ class WTNIOServer {
     var channel: Channel?
     var serverConfiguration: TLSConfiguration?
     
-    init(
+    public init(
         port: Int,
         host: String
     ) {
@@ -22,10 +23,16 @@ class WTNIOServer {
         self.group = MultiThreadedEventLoopGroup(numberOfThreads: System.coreCount)
 
         do {
-        let homePath = FileManager().currentDirectoryPath
-        let certs = try NIOSSLCertificate.fromPEMFile(homePath + "/Certificates/fullchain.pem")
+        let basePath = FileManager().currentDirectoryPath
+        let path = basePath + "/.env"
+        _ = try DotEnv.load(path: path)
+        let fullChain = ProcessInfo.processInfo.environment["FULL_CHAIN"] ?? ""
+        let privKey = ProcessInfo.processInfo.environment["PRIV_KEY"] ?? ""
+        let certPath = basePath + fullChain
+        let keyPath = basePath + privKey
+        let certs = try NIOSSLCertificate.fromPEMFile(certPath)
             .map { NIOSSLCertificateSource.certificate($0) }
-        let key = try NIOSSLPrivateKey(file: homePath + "/Certificates/privkey.pem", format: .pem)
+        let key = try NIOSSLPrivateKey(file: keyPath, format: .pem)
         let source = NIOSSLPrivateKeySource.privateKey(key)
         self.serverConfiguration = TLSConfiguration.makeServerConfiguration(certificateChain: certs, privateKey: source)
         } catch {
@@ -40,7 +47,7 @@ class WTNIOServer {
         }
     }
     
-    func start() async {
+    public func start() async {
         do {
             self.channel = try await makeChannel()
             guard let localAddress = channel?.localAddress else {
@@ -54,7 +61,7 @@ class WTNIOServer {
     }
     
     
-    func stop() async {
+    public func stop() async {
         do {
             try await channel?.close().get()
             try self.group.syncShutdownGracefully()
@@ -63,7 +70,7 @@ class WTNIOServer {
         }
     }
     
-    func makeChannel() async throws -> Channel {
+    public func makeChannel() async throws -> Channel {
         return try await serverBootstrap()
             .bind(host: self.host, port: self.port)
             .get()

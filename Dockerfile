@@ -32,7 +32,7 @@ RUN swift build -c release
 WORKDIR /staging
 
 # Copy main executable to staging area
-RUN cp "$(swift build --package-path /build -c release --show-bin-path)/WTNIOServer" ./
+RUN cp "$(swift build --package-path /build -c release --show-bin-path)/WhiteTippedNIOServer" ./
 
 # Copy any resouces from the  directory and views directory if the directories exist
 # Ensure that by default, neither the directory nor any of its contents are writable.
@@ -60,18 +60,18 @@ COPY --from=build --chown=needletail:needletail /staging /base
 # Ensure all further commands run as the needletail user
 USER needletail:needletail
 
-# Start the needletail service when the image is run, default to listening on 8888 in production environment
-CMD ["serve", "--env", "production", "--hostname", "0.0.0.0", "--port", "8888"]
+# Start the needletail service when the image is run, default to listening on 8080 in production environment
+CMD ["serve", "--env", "production", "--hostname", "0.0.0.0", "--port", "8080"]
 
 # ================================
 # WS run image
 # ================================
 FROM run-base AS ws
 
-# Let Docker bind to port 8888
-EXPOSE 8888
+# Let Docker bind to port 8080
+EXPOSE 8080
 
 # Use the API executable as the entrypoint
-ENTRYPOINT ["./WTNIOServer", "--env", "production"]
+ENTRYPOINT ["./WhiteTippedNIOServer", "--env", "production"]
 
 

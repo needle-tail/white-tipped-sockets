@@ -7,6 +7,7 @@
 
 #if canImport(Network)
 import Foundation
+import Network
 
 public struct ListenerSequence: AsyncSequence {
     public typealias Element = SequenceResult
