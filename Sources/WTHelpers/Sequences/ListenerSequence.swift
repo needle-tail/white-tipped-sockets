@@ -6,7 +6,6 @@
 //
 
 import Foundation
-import Network
 
 public struct ListenerSequence: AsyncSequence {
     public typealias Element = SequenceResult
@@ -32,7 +31,7 @@ extension ListenerSequence {
         
         let consumer: ListenerConsumer
         
-        init(consumer: ListenerConsumer) {
+       public init(consumer: ListenerConsumer) {
             self.consumer = consumer
         }
         
@@ -66,9 +65,22 @@ public enum NextResult {
 }
 
 public struct ListenerStruct {
-    var data: Data?
-    var context: NWConnection.ContentContext?
-    var isComplete: Bool
+    public var data: Data?
+    public var context: NWConnection.ContentContext?
+    public var isComplete: Bool
+    public var session: NWConnection?
+    
+    public init(
+        data: Data?,
+        context: NWConnection.ContentContext?,
+        isComplete: Bool,
+        session: NWConnection? = nil
+    ) {
+        self.data = data
+        self.context = context
+        self.isComplete = isComplete
+        self.session = session
+    }
 }
 
 public var consumedState = ConsumedState.consumed
@@ -77,7 +89,7 @@ var nextResult = NextResult.preparing
 
 public final class ListenerConsumer {
     
-    internal var queue = ListenerStack<ListenerStruct>()
+    public var queue = ListenerStack<ListenerStruct>()
     
     public init() {}
     
@@ -100,7 +112,7 @@ public final class ListenerConsumer {
 
 
 
-protocol ListenerQueue {
+public protocol ListenerQueue {
     associatedtype Element
     mutating func enqueue(_ element: Element)
     mutating func dequeue() -> Element?
@@ -108,22 +120,22 @@ protocol ListenerQueue {
     var peek: Element? { get }
 }
 
-struct ListenerStack<T>: ListenerQueue {
+public struct ListenerStack<T>: ListenerQueue {
     
     
     private var enqueueStack: [T] = []
     private var dequeueStack: [T] = []
-    var isEmpty: Bool {
+    public var isEmpty: Bool {
         return dequeueStack.isEmpty && enqueueStack.isEmpty
     }
     
     
-    var peek: T? {
+    public var peek: T? {
         return !dequeueStack.isEmpty ? dequeueStack.last : enqueueStack.first
     }
     
     
-    mutating func enqueue(_ element: T) {
+    mutating public func enqueue(_ element: T) {
         //If stack is empty we want to set the array to the enqueue stack
         if enqueueStack.isEmpty {
             dequeueStack = enqueueStack
@@ -134,7 +146,7 @@ struct ListenerStack<T>: ListenerQueue {
     
     
 //    @discardableResult
-    mutating func dequeue() -> T? {
+    mutating public func dequeue() -> T? {
         
         if dequeueStack.isEmpty {
             dequeueStack = enqueueStack.reversed()

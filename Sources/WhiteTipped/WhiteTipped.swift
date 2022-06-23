@@ -1,7 +1,10 @@
+
+#if canImport(Network) && canImport(Combine)
 import Foundation
 import Network
 import OSLog
 import Combine
+import WTHelpers
 
 public final actor WhiteTipped {
     
@@ -39,7 +42,7 @@ public final actor WhiteTipped {
     public func connect(url: URL, trustAll: Bool, certificates: [String]?) async {
         canRun = true
         endpoint = .url(url)
-
+        
         let options = NWProtocolWebSocket.Options()
         options.autoReplyPing = true
         //Limit Message size to 16MB to prevent abuse
@@ -52,17 +55,19 @@ public final actor WhiteTipped {
             options.setAdditionalHeaders(headers?.map { ($0.key, $0.value) } ?? [])
         }
         if trustAll {
-            parameters = try? trustSelfSigned(nwQueue, certificates: certificates)
+            parameters = try? await TLSConfiguration.trustSelfSigned(nwQueue, certificates: certificates, logger: logger)
         } else {
             parameters = (url.scheme == "ws" ? .tcp : .tls)
         }
 
         parameters?.defaultProtocolStack.applicationProtocols.insert(options, at: 0)
+        
         guard let endpoint = endpoint else { return }
         guard let parameters = parameters else { return }
-        
+
         connection = NWConnection(to: endpoint, using: parameters)
         connection?.start(queue: nwQueue)
+
         await pathHandlers()
         
         await monitorConnection()
@@ -337,3 +342,4 @@ public final actor WhiteTipped {
         })
     }
 }
+#endif

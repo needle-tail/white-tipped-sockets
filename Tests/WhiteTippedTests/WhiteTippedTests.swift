@@ -1,5 +1,7 @@
+#if canImport(Network)
 import XCTest
 @testable import WhiteTipped
+@testable import WTHelpers
 
 final class WhiteTippedTests: XCTestCase {
     
@@ -11,3 +13,4 @@ final class WhiteTippedTests: XCTestCase {
         }
     }
 }
+#endif

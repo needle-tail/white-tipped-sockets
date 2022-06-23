@@ -5,14 +5,18 @@
 //  Created by Cole M on 6/17/22.
 //
 
+#if canImport(Network)
 import Foundation
 import Network
 import OSLog
 
-extension WhiteTipped {
-    func trustSelfSigned(_ queue: DispatchQueue, certificates: [String]?) throws -> NWParameters {
+public class TLSConfiguration{
+    public static func trustSelfSigned(_
+                                queue: DispatchQueue,
+                                certificates: [String]?,
+                                logger: Logger
+    ) async throws -> NWParameters {
         let options = NWProtocolTLS.Options()
-        
         
         var secTrustRoots: [SecCertificate]?
         secTrustRoots = try certificates?.compactMap({ certificate in
@@ -20,7 +24,6 @@ extension WhiteTipped {
             let data = try Data(contentsOf: URL(fileURLWithPath: filePath))
             return SecCertificateCreateWithData(nil, data as CFData)!
         })
-        
         
         sec_protocol_options_set_verify_block(
             options.securityProtocolOptions,
@@ -33,17 +36,20 @@ extension WhiteTipped {
                 dispatchPrecondition(condition: .onQueue(queue))
                 SecTrustEvaluateAsyncWithError(trust, queue) { _, result, error in
                     if let error = error {
-                        self.logger.critical("Trust failed: \(error.localizedDescription)")
+                        logger.critical("Trust failed: \(error.localizedDescription)")
                     }
-                    self.logger.info("\(result)")
+                    logger.info("Validation Result: \(result)")
                     sec_protocol_verify_complete(result)
                 }
             }, queue)
         
-        
         /// We can set minimum TLS protocol
         sec_protocol_options_set_min_tls_protocol_version(options.securityProtocolOptions, .TLSv12)
         
-        return NWParameters(tls: options)
+        let parameters = NWParameters(tls: options)
+        parameters.allowLocalEndpointReuse = true
+        parameters.includePeerToPeer = true
+        return parameters
     }
 }
+#endif

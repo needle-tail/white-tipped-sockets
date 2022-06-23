@@ -4,7 +4,7 @@
 //
 //  Created by Cole M on 6/16/22.
 //
-
+#if canImport(Network) && canImport(Combine) && canImport(SwiftUI)
 import Combine
 import Foundation
 import Network
@@ -23,3 +23,4 @@ public class WhiteTippedReciever {
     public let viablePathReceived = PassthroughSubject<Bool, Never>()
     public let connectionStatus = PassthroughSubject<Bool, Never>()
 }
+#endif
