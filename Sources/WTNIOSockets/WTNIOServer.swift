@@ -21,7 +21,16 @@ public class WTNIOServer {
         self.port = port
         self.host = host
         self.group = MultiThreadedEventLoopGroup(numberOfThreads: System.coreCount)
-
+    }
+    
+    
+    deinit {
+        Task {
+        await stop()
+        }
+    }
+    
+    public func addTLS() {
         do {
         let basePath = FileManager().currentDirectoryPath
         let path = basePath + "/.env"
@@ -37,13 +46,6 @@ public class WTNIOServer {
         self.serverConfiguration = TLSConfiguration.makeServerConfiguration(certificateChain: certs, privateKey: source)
         } catch {
             print(error)
-        }
-    }
-    
-    
-    deinit {
-        Task {
-        await stop()
         }
     }
     

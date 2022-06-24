@@ -11,35 +11,35 @@ import NIOWebSocket
 
 
 
-class WebSocketHandler: ChannelInboundHandler {
+public class WebSocketHandler: ChannelInboundHandler {
     
-    typealias InboundIn = WebSocketFrame
-    typealias OutboundOut = WebSocketFrame
+    public typealias InboundIn = WebSocketFrame
+    public typealias OutboundOut = WebSocketFrame
     
     private var awaitingClose: Bool = false
     
-    func channelActive(context: ChannelHandlerContext) {
+    public func channelActive(context: ChannelHandlerContext) {
         print("Channel Active")
     }
     
-    func channelInactive(context: ChannelHandlerContext) {
+    public func channelInactive(context: ChannelHandlerContext) {
         print("Channel InActive")
     }
     
-    func channelRegistered(context: ChannelHandlerContext) {
+    public func channelRegistered(context: ChannelHandlerContext) {
         print("Channel Registered")
     }
     
-    func channelUnregistered(context: ChannelHandlerContext) {
+    public func channelUnregistered(context: ChannelHandlerContext) {
         print("Channel Unregistered")
     }
     
-    func channelReadComplete(context: ChannelHandlerContext) {
+    public func channelReadComplete(context: ChannelHandlerContext) {
         print("Channel Read Complete")
         context.flush()
     }
     
-    func channelRead(context: ChannelHandlerContext, data: NIOAny) {
+    public func channelRead(context: ChannelHandlerContext, data: NIOAny) {
         print("Channel Read")
         let frame = self.unwrapInboundIn(data)
 
@@ -61,7 +61,7 @@ class WebSocketHandler: ChannelInboundHandler {
         }
     }
     
-    func channelWritabilityChanged(context: ChannelHandlerContext) {
+    public func channelWritabilityChanged(context: ChannelHandlerContext) {
         print("Channel Written")
     }
     
