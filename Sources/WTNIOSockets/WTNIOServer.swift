@@ -106,7 +106,8 @@ public class WTNIOServer {
         let websocketUpgrader = NIOWebSocketServerUpgrader { channel, req in
             channel.eventLoop.makeSucceededFuture([:])
         } upgradePipelineHandler: { channel, _ in
-            channel.pipeline.addHandler(WebSocketHandler())
+            let socket = WebSocket(channel: channel)
+           return channel.pipeline.addHandler(WebSocketHandler(websocket: socket))
         }
 
         return channel.pipeline.configureHTTPServerPipeline(
@@ -117,5 +118,15 @@ public class WTNIOServer {
                 }
             )
         )
+    }
+    
+    public static func server(
+        on channel: Channel,
+        onUpgrade: @escaping (WebSocketHandler) -> ()
+    ) async throws {
+        let socket = WebSocket(channel: channel)
+        let webSocket = WebSocketHandler(websocket: socket)
+        try await channel.pipeline.addHandler(webSocket)
+        onUpgrade(webSocket)
     }
 }
