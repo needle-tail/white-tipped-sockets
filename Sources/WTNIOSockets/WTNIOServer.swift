@@ -6,7 +6,7 @@ import NIOPosix
 import Foundation
 import DotEnv
 
-public actor WTNIOServer {
+public class WTNIOServer {
     
     let port: Int
     let host: String
