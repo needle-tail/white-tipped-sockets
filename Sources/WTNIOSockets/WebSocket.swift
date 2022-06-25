@@ -9,7 +9,7 @@ import Foundation
 import NIOCore
 import NIOWebSocket
 
-class WebSocket {
+public actor WebSocket {
     
     var channel: Channel
     private var awaitingClose: Bool = false

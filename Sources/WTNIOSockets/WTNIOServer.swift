@@ -6,7 +6,7 @@ import NIOPosix
 import Foundation
 import DotEnv
 
-public class WTNIOServer {
+public actor WTNIOServer {
     
     let port: Int
     let host: String
@@ -86,20 +86,24 @@ public class WTNIOServer {
             .serverChannelOption(ChannelOptions.backlog, value: 256)
             .serverChannelOption(ChannelOptions.socketOption(.so_reuseaddr), value: 1)
             .childChannelInitializer { channel in
-                return try! self.makeHandler(channel: channel)
+                let promise = channel.eventLoop.makePromise(of: Void.self)
+                promise.completeWithTask {
+                try! await self.makeHandler(channel: channel)
+                }
+                return promise.futureResult
             }
         // Enable SO_REUSEADDR for the accepted Channels
             .childChannelOption(ChannelOptions.socketOption(.so_reuseaddr), value: 1)
         return bootstrap
     }
 
-    func makeHandler(channel: Channel) throws -> EventLoopFuture<Void> {
+    func makeHandler(channel: Channel) async throws {
 
         if let config = self.serverConfiguration {
             let sslContext = try NIOSSLContext(configuration: config)
 
             let handler = NIOSSLServerHandler(context: sslContext)
-            _ = channel.pipeline.addHandler(handler)
+            try await channel.pipeline.addHandler(handler)
         }
 
         /// Initialize our WS Upgrader for the Server and add our WSHandler to it
@@ -110,23 +114,23 @@ public class WTNIOServer {
            return channel.pipeline.addHandler(WebSocketHandler(websocket: socket))
         }
 
-        return channel.pipeline.configureHTTPServerPipeline(
+        try await channel.pipeline.configureHTTPServerPipeline(
             withServerUpgrade: (
                 upgraders: [websocketUpgrader],
                 completionHandler: { ctx in
                     print("Completed Setup")
                 }
             )
-        )
+        ).get()
     }
     
     public static func server(
         on channel: Channel,
-        onUpgrade: @escaping (WebSocketHandler) -> ()
+        onUpgrade: @escaping (WebSocketHandler) async -> ()
     ) async throws {
         let socket = WebSocket(channel: channel)
         let webSocket = WebSocketHandler(websocket: socket)
         try await channel.pipeline.addHandler(webSocket)
-        onUpgrade(webSocket)
+        await onUpgrade(webSocket)
     }
 }
