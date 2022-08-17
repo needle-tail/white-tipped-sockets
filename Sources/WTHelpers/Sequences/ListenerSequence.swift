@@ -38,7 +38,7 @@ extension ListenerSequence {
         }
         
         mutating public func next() async throws -> SequenceResult? {
-            let result = consumer.next()
+            let result = await consumer.next()
             var res: SequenceResult?
             switch result {
             case .ready(let sequence):
@@ -96,15 +96,15 @@ public final class ListenerConsumer {
     public init() {}
     
     
-    public func feedConsumer(_ conversation: ListenerStruct) {
-        queue.enqueue(conversation)
+    public func feedConsumer(_ conversation: ListenerStruct) async {
+        await queue.enqueue(conversation)
     }
     
-    func next() -> NextResult {
+    func next() async -> NextResult {
         switch dequeuedConsumedState {
         case .consumed:
             consumedState = .waiting
-            guard let listener = queue.dequeue() else { return .finished }
+            guard let listener = await queue.dequeue() else { return .finished }
             return .ready(listener)
         case .waiting:
             return .preparing
@@ -116,28 +116,29 @@ public final class ListenerConsumer {
 
 public protocol ListenerQueue {
     associatedtype Element
-    mutating func enqueue(_ element: Element)
-    mutating func dequeue() -> Element?
-    var isEmpty: Bool { get }
-    var peek: Element? { get }
+    func enqueue(_ element: Element) async
+    func dequeue() async -> Element?
+//    var isEmpty: Bool { get }
+//    var peek: Element? { get }
 }
 
-public struct ListenerStack<T>: ListenerQueue {
+public actor ListenerStack<T>: ListenerQueue {
     
     
     private var enqueueStack: [T] = []
     private var dequeueStack: [T] = []
-    public var isEmpty: Bool {
-        return dequeueStack.isEmpty && enqueueStack.isEmpty
-    }
+//    public var isEmpty: Bool {
+//        return dequeueStack.isEmpty && enqueueStack.isEmpty
+//    }
+    
+    public init() {}
+    
+//    public var peek: T? {
+//        return !dequeueStack.isEmpty ? dequeueStack.last : enqueueStack.first
+//    }
     
     
-    public var peek: T? {
-        return !dequeueStack.isEmpty ? dequeueStack.last : enqueueStack.first
-    }
-    
-    
-    mutating public func enqueue(_ element: T) {
+    public func enqueue(_ element: T) async {
         //If stack is empty we want to set the array to the enqueue stack
         if enqueueStack.isEmpty {
             dequeueStack = enqueueStack
@@ -147,9 +148,8 @@ public struct ListenerStack<T>: ListenerQueue {
     }
     
     
-//    @discardableResult
-    mutating public func dequeue() -> T? {
-        
+    @discardableResult
+    public func dequeue() async -> T? {
         if dequeueStack.isEmpty {
             dequeueStack = enqueueStack.reversed()
             enqueueStack.removeAll()

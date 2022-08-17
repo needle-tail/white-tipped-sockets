@@ -24,11 +24,12 @@ public class WebSocket {
         case .connectionClose:
             try await self.receivedClose(context: context, frame: frame)
         case .ping:
-           try await self.pong(context: context, frame: frame)
+            print("ping")
+//           try await self.pong(context: context, frame: frame)
         case .text:
             var data = frame.unmaskedData
             let text = data.readString(length: data.readableBytes) ?? ""
-            print(text)
+//            print(text)
         case .binary, .continuation, .pong:
             // We ignore these frames.
             break

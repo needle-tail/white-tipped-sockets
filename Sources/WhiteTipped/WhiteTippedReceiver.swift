@@ -5,7 +5,6 @@
 //  Created by Cole M on 6/16/22.
 //
 #if canImport(Network) && canImport(Combine) && canImport(SwiftUI)
-import Combine
 import Foundation
 import Network
 
@@ -14,13 +13,15 @@ public struct DisconnectResult {
     public var code: NWProtocolWebSocket.CloseCode
 }
 
-public class WhiteTippedReciever {
-    public let textReceived = PassthroughSubject<String, Never>()
-    public let binaryReceived = PassthroughSubject<Data, Never>()
-    public let pongReceived = PassthroughSubject<Data, Never>()
-    public let disconnectionPacketReceived = PassthroughSubject<DisconnectResult, Never>()
-    public let betterPathReceived = PassthroughSubject<Bool, Never>()
-    public let viablePathReceived = PassthroughSubject<Bool, Never>()
-    public let connectionStatus = PassthroughSubject<Bool, Never>()
+open class WhiteTippedReciever: NSObject, ObservableObject {
+    @Published @objc dynamic open var textReceived = ""
+    @Published @objc dynamic open var binaryReceived = Data()
+    @Published @objc dynamic open var pongReceived = Data()
+    @Published @objc dynamic open var betterPathReceived = false
+    @Published @objc dynamic open var viablePathReceived = false
+    @Published @objc dynamic open var connectionStatus = false
+    @Published open var disconnectionPacketReceived: DisconnectResult?
+    
+//    public init() {}
 }
 #endif

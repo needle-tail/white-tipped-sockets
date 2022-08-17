@@ -75,16 +75,14 @@ public final actor WhiteTippedServer {
     
     private func pathHandlers() async {
         stateCancellable = connectionState.publisher(for: \.listenerState) as? Cancellable
-        print("LISETEN",listener)
         listener?.stateUpdateHandler = { [weak self] state in
-            print("STATE___", state)
             guard let strongSelf = self else {return}
             strongSelf.connectionState.listenerState = state
         }
         
         connectionCancellable = connectionState.publisher(for: \.connection) as? Cancellable
         listener?.newConnectionHandler = { [weak self] connection in
-            print(connection)
+//            print(connection)
             guard let strongSelf = self else {return}
             strongSelf.connectionState.connection = connection
         }

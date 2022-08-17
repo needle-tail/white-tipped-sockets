@@ -5,7 +5,7 @@ import PackageDescription
 
 let package = Package(
     name: "white-tipped-sockets",
-    platforms: [.macOS(.v12), .iOS(.v15)],
+    platforms: [.macOS(.v12), .iOS(.v14)],
     products: [
         // Products define the executables and libraries a package produces, and make them visible to other packages.
         .library(
@@ -47,6 +47,7 @@ let package = Package(
                 .product(name: "NIOWebSocket", package: "swift-nio"),
                 .product(name: "NIOSSL", package: "swift-nio-ssl"),
                 .product(name: "DotEnv", package: "DotEnv"),
+                "WTHelpers"
                ]),
         .target(
             name: "WTHelpers",
