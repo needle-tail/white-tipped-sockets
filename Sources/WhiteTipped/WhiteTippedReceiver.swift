@@ -13,7 +13,7 @@ public struct DisconnectResult {
     public var code: NWProtocolWebSocket.CloseCode
 }
 
-open class WhiteTippedReciever: NSObject, ObservableObject {
+open class WhiteTippedReciever: NSObject, ObservableObject, @unchecked Sendable {
     @Published @objc dynamic open var textReceived = ""
     @Published @objc dynamic open var binaryReceived = Data()
     @Published @objc dynamic open var pongReceived = Data()
