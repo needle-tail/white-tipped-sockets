@@ -11,6 +11,8 @@ import Network
 import OSLog
 
 public class TLSConfiguration{
+    
+    @available(iOS 14, *)
     public static func trustSelfSigned(_
                                 queue: DispatchQueue,
                                 certificates: [String]?,

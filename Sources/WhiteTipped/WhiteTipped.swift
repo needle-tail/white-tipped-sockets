@@ -6,6 +6,7 @@ import OSLog
 import Combine
 import WTHelpers
 
+@available(iOS 14, *)
 public final actor WhiteTipped {
     
     public var headers: [String: String]?
@@ -15,7 +16,7 @@ public final actor WhiteTipped {
     private var connection: NWConnection?
     private var parameters: NWParameters?
     private var endpoint: NWEndpoint?
-    let logger: Logger
+    let logger: Logger = Logger(subsystem: "WhiteTipped", category: "NWConnection")
     private var consumer = ListenerConsumer()
     @MainActor public var receiver = WhiteTippedReciever()
     
@@ -28,7 +29,6 @@ public final actor WhiteTipped {
         self.headers = headers
         self.urlRequest = urlRequest
         self.cookies = cookies
-        logger = Logger(subsystem: "WhiteTipped", category: "NWConnection")
     }
     
     
@@ -103,14 +103,14 @@ public final actor WhiteTipped {
     private func receiveAndFeed() {
         connection?.receiveMessage(completion: { completeContent, contentContext, isComplete, error in
             let listener = ListenerStruct(data: completeContent, context: contentContext, isComplete: isComplete)
-           
+            
             Task {
                 await self.consumer.feedConsumer(listener)
-                    do {
-                        try await self.channelRead()
-                    } catch {
-                        self.logger.error("Error Reading Channel: \(error.localizedDescription)")
-                    }
+                do {
+                    try await self.channelRead()
+                } catch {
+                    self.logger.error("Error Reading Channel: \(error.localizedDescription)")
+                }
             }
             if error == nil {
                 self.receiveAndFeed()
@@ -120,55 +120,57 @@ public final actor WhiteTipped {
     
     
     private func channelRead() async throws {
-        do {
-            for try await result in ListenerSequence(consumer: consumer) {
-                switch result {
-                case .success(let listener):
-                    guard let metadata = listener.context?.protocolMetadata.first as? NWProtocolWebSocket.Metadata else { return }
-                    switch metadata.opcode {
-                    case .cont:
-                        logger.trace("Received continuous WebSocketFrame")
-                        return
-                    case .text:
-                        logger.trace("Received text WebSocketFrame")
-                        guard let data = listener.data else { return }
-                        guard let text = String(data: data, encoding: .utf8) else { return }
-                        await MainActor.run {
-                            receiver.textReceived = text
+        if #available(iOS 15, macOS 12, *) {
+            do {
+                for try await result in ListenerSequence(consumer: consumer) {
+                    switch result {
+                    case .success(let listener):
+                        guard let metadata = listener.context?.protocolMetadata.first as? NWProtocolWebSocket.Metadata else { return }
+                        switch metadata.opcode {
+                        case .cont:
+                            logger.trace("Received continuous WebSocketFrame")
+                            return
+                        case .text:
+                            logger.trace("Received text WebSocketFrame")
+                            guard let data = listener.data else { return }
+                            guard let text = String(data: data, encoding: .utf8) else { return }
+                            await MainActor.run {
+                                receiver.textReceived = text
+                            }
+                            return
+                        case .binary:
+                            logger.trace("Received binary WebSocketFrame")
+                            guard let data = listener.data else { return }
+                            await MainActor.run {
+                                receiver.binaryReceived = data
+                            }
+                            return
+                        case .close:
+                            logger.trace("Received close WebSocketFrame")
+                            connection?.cancel()
+                            await notifyDisconnection(.protocolCode(.goingAway))
+                            return
+                        case .ping:
+                            logger.trace("Received ping WebSocketFrame")
+                            return
+                        case .pong:
+                            logger.trace("Received pong WebSocketFrame")
+                            return
+                        @unknown default:
+                            fatalError("Unkown State Case")
                         }
+                    case .finished:
+                        logger.trace("Finished")
                         return
-                    case .binary:
-                        logger.trace("Received binary WebSocketFrame")
-                        guard let data = listener.data else { return }
-                        await MainActor.run {
-                            receiver.binaryReceived = data
-                        }
+                    case .retry:
+                        logger.trace("Will retry")
                         return
-                    case .close:
-                        logger.trace("Received close WebSocketFrame")
-                        connection?.cancel()
-                        await notifyDisconnection(.protocolCode(.goingAway))
-                        return
-                    case .ping:
-                        logger.trace("Received ping WebSocketFrame")
-                        return
-                    case .pong:
-                        logger.trace("Received pong WebSocketFrame")
-                        return
-                    @unknown default:
-                        fatalError("Unkown State Case")
                     }
-                case .finished:
-                    logger.trace("Finished")
-                    return
-                case .retry:
-                    logger.trace("Will retry")
-                    return
+                    
                 }
-                
+            } catch {
+                logger.error("\(error.localizedDescription)")
             }
-        } catch {
-            logger.error("\(error.localizedDescription)")
         }
     }
     
@@ -321,8 +323,8 @@ public final actor WhiteTipped {
     
     
     func send(data: Data?, context: NWConnection.ContentContext) async throws {
-            try await sendAsync(data: data, context: context)
-            receiveAndFeed()
+        try await sendAsync(data: data, context: context)
+        receiveAndFeed()
     }
     
     

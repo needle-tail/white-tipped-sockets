@@ -21,7 +21,8 @@ public final actor WhiteTippedServer {
     private var listener: NWListener?
     private var parameters: NWParameters?
     private var endpoint: NWEndpoint?
-    let logger: Logger
+    @available(iOS 14, *)
+    let logger: Logger = Logger(subsystem: "WhiteTipped", category: "NWConnection")
     private var consumer = ListenerConsumer()
     //    @MainActor public var receiver = WhiteTippedReciever()
     
@@ -34,7 +35,6 @@ public final actor WhiteTippedServer {
         self.headers = headers
         self.urlRequest = urlRequest
         self.cookies = cookies
-        logger = Logger(subsystem: "WhiteTipped", category: "NWConnection")
     }
     
     
@@ -47,29 +47,29 @@ public final actor WhiteTippedServer {
     public func listen() async {
         canRun = true
         do {
-        let parameters = try await TLSConfiguration.trustSelfSigned(nwQueue, certificates: nil, logger: logger)
-        
-        let options = NWProtocolWebSocket.Options()
-        options.autoReplyPing = true
-        //Limit Message size to 16MB to prevent abuse
-        options.maximumMessageSize = 1_000_000 * 16
+            let parameters = try await TLSConfiguration.trustSelfSigned(nwQueue, certificates: nil, logger: logger)
             
-        parameters.defaultProtocolStack.applicationProtocols.insert(options, at: 0)
-
-                listener = try NWListener(using: parameters, on: 8080)
+            let options = NWProtocolWebSocket.Options()
+            options.autoReplyPing = true
+            //Limit Message size to 16MB to prevent abuse
+            options.maximumMessageSize = 1_000_000 * 16
+            
+            parameters.defaultProtocolStack.applicationProtocols.insert(options, at: 0)
+            
+            listener = try NWListener(using: parameters, on: 8080)
             listener?.service = NWListener.Service(
                 name: "WTServer",
                 type: "server.ws",
                 domain: "needletails.com",
                 txtRecord: nil)
             
-                await pathHandlers()
-                await monitorConnection()
-                await handleConnections()
-                listener?.start(queue: nwQueue)
-    } catch {
-        fatalError("Unable to start WebSocket server on port \(8080)")
-    }
+            await pathHandlers()
+            await monitorConnection()
+            await handleConnections()
+            listener?.start(queue: nwQueue)
+        } catch {
+            fatalError("Unable to start WebSocket server on port \(8080)")
+        }
     }
     
     
@@ -82,7 +82,7 @@ public final actor WhiteTippedServer {
         
         connectionCancellable = connectionState.publisher(for: \.connection) as? Cancellable
         listener?.newConnectionHandler = { [weak self] connection in
-//            print(connection)
+            //            print(connection)
             guard let strongSelf = self else {return}
             strongSelf.connectionState.connection = connection
         }
@@ -92,15 +92,35 @@ public final actor WhiteTippedServer {
         for await state in connectionState.$listenerState.values {
             switch state {
             case .setup:
-                logger.trace("Connection setup")
+                if #available(iOS 14, *) {
+                    logger.trace("Connection setup")
+                } else {
+                    print("Connection setup")
+                }
             case .waiting(let error):
-                logger.trace("Connection waiting with status - Error: \(error.localizedDescription)")
+                if #available(iOS 14, *) {
+                    logger.trace("Connection waiting with status - Error: \(error.localizedDescription)")
+                } else {
+                    print("Connection waiting with status - Error: \(error.localizedDescription)")
+                }
             case .ready:
-                logger.trace("Connection ready")
+                if #available(iOS 14, *) {
+                    logger.trace("Connection ready")
+                } else {
+                    print("Connection ready")
+                }
             case .failed(let error):
-                logger.trace("Connection failed with error - Error: \(error.localizedDescription)")
+                if #available(iOS 14, *) {
+                    logger.trace("Connection failed with error - Error: \(error.localizedDescription)")
+                } else {
+                    print("Connection failed with error - Error: \(error.localizedDescription)")
+                }
             case .cancelled:
-                logger.trace("Connection cancelled")
+                if #available(iOS 14, *) {
+                    logger.trace("Connection cancelled")
+                } else {
+                    print("Connection cancelled")
+                }
             @unknown default:
                 break
             }
@@ -118,12 +138,12 @@ public final actor WhiteTippedServer {
                     isComplete: isComplete,
                     session: session
                 )
-                self.consumer.feedConsumer(listener)
-                Task {
-                    if !self.consumer.queue.isEmpty {
-                        try await self.channelRead()
-                    }
-                }
+//                self.consumer.feedConsumer(listener)
+                //                Task {
+                //                    if !self.consumer.queue.isEmpty {
+                //                        try await self.channelRead()
+                //                    }
+                //                }
             })
             break
         }
@@ -144,46 +164,82 @@ public final actor WhiteTippedServer {
                     guard let metadata = listener.context?.protocolMetadata.first as? NWProtocolWebSocket.Metadata else { return }
                     switch metadata.opcode {
                     case .cont:
-                        logger.trace("Received continuous WebSocketFrame")
+                        if #available(iOS 14, *) {
+                            logger.trace("Received continuous WebSocketFrame")
+                        } else {
+                            print("Received continuous WebSocketFrame")
+                        }
                         return
                     case .text:
-                        logger.trace("Received text WebSocketFrame")
+                        if #available(iOS 14, *) {
+                            logger.trace("Received text WebSocketFrame")
+                        } else {
+                            print("Received text WebSocketFrame")
+                        }
                         guard let data = listener.data else { return }
                         guard let text = String(data: data, encoding: .utf8) else { return }
                         guard let session = listener.session else { return }
                         try await sendText(session, text: text)
                         return
                     case .binary:
-                        logger.trace("Received binary WebSocketFrame")
+                        if #available(iOS 14, *) {
+                            logger.trace("Received binary WebSocketFrame")
+                        } else {
+                            print("Received binary WebSocketFrame")
+                        }
                         guard let data = listener.data else { return }
                         guard let session = listener.session else { return }
                         try await sendBinary(session, data: data)
                         return
                     case .close:
-                        logger.trace("Received close WebSocketFrame")
+                        if #available(iOS 14, *) {
+                            logger.trace("Received close WebSocketFrame")
+                        } else {
+                            print("Received close WebSocketFrame")
+                        }
                         return
                     case .ping:
-                        logger.trace("Received ping WebSocketFrame")
+                        if #available(iOS 14, *) {
+                            logger.trace("Received ping WebSocketFrame")
+                        } else {
+                            print("Received ping WebSocketFrame")
+                        }
                         guard let session = listener.session else { return }
                         try await sendPong(session)
                         return
                     case .pong:
-                        logger.trace("Received pong WebSocketFrame")
+                        if #available(iOS 14, *) {
+                            logger.trace("Received pong WebSocketFrame")
+                        } else {
+                            print("Received pong WebSocketFrame")
+                        }
                         return
                     @unknown default:
                         fatalError("Unkown State Case")
                     }
                 case .finished:
-                    logger.trace("Finished")
+                    if #available(iOS 14, *) {
+                        logger.trace("Finished")
+                    } else {
+                        print("Finished")
+                    }
                     return
                 case .retry:
-                    logger.trace("Will retry")
+                    if #available(iOS 14, *) {
+                        logger.trace("Will retry")
+                    } else {
+                        print("Will retry")
+                    }
                     return
                 }
                 
             }
         } catch {
-            logger.error("\(error.localizedDescription)")
+            if #available(iOS 14, *) {
+                logger.error("\(error.localizedDescription)")
+            } else {
+                print("\(error.localizedDescription)")
+            }
         }
     }
     
