@@ -29,7 +29,7 @@ let package = Package(
         // .package(url: /* package url */, from: "1.0.0"),
         .package(url: "https://github.com/apple/swift-nio.git", from: "2.40.0"),
         .package(url: "https://github.com/apple/swift-nio-ssl.git", from: "2.20.0"),
-        .package(url: "https://github.com/swiftpackages/DotEnv.git", from: "2.0.0")
+        .package(url: "https://github.com/swiftpackages/DotEnv.git", .upToNextMajor(from: "3.0.0"))
     ],
     targets: [
         // Targets are the basic building blocks of a package. A target can define a module or a test suite.

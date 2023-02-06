@@ -5,8 +5,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/swiftpackages/DotEnv.git",
       "state" : {
-        "revision" : "9da99f76b752153036a204b50045d6c56c0faeea",
-        "version" : "2.0.0"
+        "revision" : "1f15bb9de727d694af1d003a1a5d7a553752850f",
+        "version" : "3.0.0"
       }
     },
     {
