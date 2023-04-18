@@ -9,6 +9,7 @@
 import Foundation
 import Network
 
+@available(macOS 10.15, iOS 13, tvOS 13, watchOS 6, *)
 public struct ListenerSequence: AsyncSequence {
     public typealias Element = SequenceResult
     
@@ -26,6 +27,7 @@ public struct ListenerSequence: AsyncSequence {
     
 }
 
+@available(macOS 10.15, iOS 13, tvOS 13, watchOS 6, *)
 extension ListenerSequence {
     public struct Iterator: AsyncIteratorProtocol {
         
@@ -58,14 +60,17 @@ public enum ConsumedState {
     case consumed, waiting
 }
 
+@available(macOS 10.15, iOS 13, tvOS 13, watchOS 6, *)
 public enum SequenceResult {
     case success(ListenerStruct), retry, finished
 }
 
+@available(macOS 10.15, iOS 13, tvOS 13, watchOS 6, *)
 public enum NextResult {
     case ready(ListenerStruct) , preparing, finished
 }
 
+@available(macOS 10.15, iOS 13, tvOS 13, watchOS 6, *)
 public struct ListenerStruct {
     public var data: Data?
     public var context: NWConnection.ContentContext?
@@ -87,8 +92,10 @@ public struct ListenerStruct {
 
 public var consumedState = ConsumedState.consumed
 public var dequeuedConsumedState = ConsumedState.consumed
+@available(macOS 10.15, iOS 13, tvOS 13, watchOS 6, *)
 var nextResult = NextResult.preparing
 
+@available(macOS 10.15, iOS 13, tvOS 13, watchOS 6, *)
 public final class ListenerConsumer {
     
     public var queue = ListenerStack<ListenerStruct>()
@@ -113,7 +120,7 @@ public final class ListenerConsumer {
 }
 
 
-
+@available(macOS 10.15, iOS 13, tvOS 13, watchOS 6, *)
 public protocol ListenerQueue {
     associatedtype Element
     func enqueue(_ element: Element) async
@@ -122,6 +129,7 @@ public protocol ListenerQueue {
 //    var peek: Element? { get }
 }
 
+@available(macOS 10.15, iOS 13, tvOS 13, watchOS 6, *)
 public actor ListenerStack<T>: ListenerQueue {
     
     

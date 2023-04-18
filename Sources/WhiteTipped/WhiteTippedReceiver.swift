@@ -8,11 +8,13 @@
 import Foundation
 import Network
 
+@available(macOS 10.15, iOS 13, tvOS 13, watchOS 6, *)
 public struct DisconnectResult {
     public var error: NWError?
     public var code: NWProtocolWebSocket.CloseCode
 }
 
+@available(macOS 10.15, iOS 13, tvOS 13, watchOS 6, *)
 open class WhiteTippedReciever: NSObject, ObservableObject, @unchecked Sendable {
     @Published @objc dynamic open var textReceived = ""
     @Published @objc dynamic open var binaryReceived = Data()

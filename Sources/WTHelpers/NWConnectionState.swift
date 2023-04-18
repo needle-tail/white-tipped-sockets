@@ -9,6 +9,7 @@
 import Foundation
 import Network
 
+@available(macOS 10.15, iOS 13, tvOS 13, watchOS 6, *)
 public class NWConnectionState: NSObject, ObservableObject {
     @Published public var currentState: NWConnection.State = .preparing
     @Published public var listenerState: NWListener.State = .setup
