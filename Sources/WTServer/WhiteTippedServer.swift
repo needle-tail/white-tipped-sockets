@@ -39,7 +39,7 @@ public final actor WhiteTippedServer {
     
     
     var nwQueue = DispatchQueue(label: "WTK")
-    let connectionState = NWConnectionState()
+    let connectionState = ObservableNWConnectionState()
     var stateCancellable: Cancellable?
     var connectionCancellable: Cancellable?
     

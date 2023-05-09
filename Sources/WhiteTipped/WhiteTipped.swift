@@ -6,12 +6,12 @@ import OSLog
 import Combine
 import WTHelpers
 
-@available(iOS 14, *)
-public final actor WhiteTipped {
+@available(iOS 16, macOS 13, *)
+public final actor AsyncWhiteTipped: NSObject {
     
     public var headers: [String: String]?
     public var urlRequest: URLRequest?
-    public var cookies: HTTPCookie?
+    public var cookies: [HTTPCookie]
     private var canRun: Bool = true
     private var connection: NWConnection?
     private var parameters: NWParameters?
@@ -19,21 +19,31 @@ public final actor WhiteTipped {
     let logger: Logger = Logger(subsystem: "WhiteTipped", category: "NWConnection")
     private var consumer = ListenerConsumer()
     @MainActor public var receiver = WhiteTippedReciever()
+    var pingInterval: TimeInterval = 1.0
+    var connectionTimeout: Int = 7
+    weak var receiverDelegate: WhiteTippedRecieverProtocol?
+    public func setDelegate(_ conformer: WhiteTippedRecieverProtocol) {
+        self.receiverDelegate = conformer
+    }
     
     
     public init(
         headers: [String: String]?,
         urlRequest: URLRequest?,
-        cookies: HTTPCookie?
-    ) async {
+        cookies: [HTTPCookie],
+        pingInterval: TimeInterval,
+        connectionTimeout: Int
+    ) {
         self.headers = headers
         self.urlRequest = urlRequest
         self.cookies = cookies
+        self.pingInterval = pingInterval
+        self.connectionTimeout = connectionTimeout
     }
     
     
     var nwQueue = DispatchQueue(label: "WTK")
-    let connectionState = NWConnectionState()
+    let connectionState = ObservableNWConnectionState()
     var stateCancellable: Cancellable?
     var betterPathCancellable: Cancellable?
     var viablePatheCancellable: Cancellable?
@@ -50,12 +60,15 @@ public final actor WhiteTipped {
         
         if urlRequest != nil {
             options.setAdditionalHeaders(urlRequest?.allHTTPHeaderFields?.map { ($0.key, $0.value) } ?? [])
+            _ = self.cookies.map { cookie in
+                options.setAdditionalHeaders([(name: cookie.name, value: cookie.value)])
+            }
         }
         if headers != nil {
             options.setAdditionalHeaders(headers?.map { ($0.key, $0.value) } ?? [])
         }
         if trustAll {
-            parameters = try? await TLSConfiguration.trustSelfSigned(nwQueue, certificates: certificates, logger: logger)
+            parameters = try? TLSConfiguration.trustSelfSigned(nwQueue, certificates: certificates, logger: logger)
         } else {
             parameters = (url.scheme == "ws" ? .tcp : .tls)
         }
@@ -120,57 +133,57 @@ public final actor WhiteTipped {
     
     
     private func channelRead() async throws {
-        if #available(iOS 15, macOS 12, *) {
-            do {
-                for try await result in ListenerSequence(consumer: consumer) {
-                    switch result {
-                    case .success(let listener):
-                        guard let metadata = listener.context?.protocolMetadata.first as? NWProtocolWebSocket.Metadata else { return }
-                        switch metadata.opcode {
-                        case .cont:
-                            logger.trace("Received continuous WebSocketFrame")
-                            return
-                        case .text:
-                            logger.trace("Received text WebSocketFrame")
-                            guard let data = listener.data else { return }
-                            guard let text = String(data: data, encoding: .utf8) else { return }
-                            await MainActor.run {
-                                receiver.textReceived = text
-                            }
-                            return
-                        case .binary:
-                            logger.trace("Received binary WebSocketFrame")
-                            guard let data = listener.data else { return }
-                            await MainActor.run {
-                                receiver.binaryReceived = data
-                            }
-                            return
-                        case .close:
-                            logger.trace("Received close WebSocketFrame")
-                            connection?.cancel()
-                            await notifyDisconnection(.protocolCode(.goingAway))
-                            return
-                        case .ping:
-                            logger.trace("Received ping WebSocketFrame")
-                            return
-                        case .pong:
-                            logger.trace("Received pong WebSocketFrame")
-                            return
-                        @unknown default:
-                            fatalError("Unkown State Case")
+        do {
+            for try await result in ListenerSequence(consumer: consumer) {
+                switch result {
+                case .success(let listener):
+                    guard let metadata = listener.context?.protocolMetadata.first as? NWProtocolWebSocket.Metadata else { return }
+                    switch metadata.opcode {
+                    case .cont:
+                        logger.trace("Received continuous WebSocketFrame")
+                        return
+                    case .text:
+                        logger.trace("Received text WebSocketFrame")
+                        guard let data = listener.data else { return }
+                        guard let text = String(data: data, encoding: .utf8) else { return }
+                        receiverDelegate?.received(.text, packet: MessagePacket(text: text))
+                        await MainActor.run {
+                            receiver.textReceived = text
                         }
-                    case .finished:
-                        logger.trace("Finished")
                         return
-                    case .retry:
-                        logger.trace("Will retry")
+                    case .binary:
+                        logger.trace("Received binary WebSocketFrame")
+                        guard let data = listener.data else { return }
+                        receiverDelegate?.received(.binary, packet: MessagePacket(binary: data))
+                        await MainActor.run {
+                            receiver.binaryReceived = data
+                        }
                         return
+                    case .close:
+                        logger.trace("Received close WebSocketFrame")
+                        connection?.cancel()
+                        await notifyDisconnection(.protocolCode(.goingAway))
+                        return
+                    case .ping:
+                        logger.trace("Received ping WebSocketFrame")
+                        return
+                    case .pong:
+                        logger.trace("Received pong WebSocketFrame")
+                        return
+                    @unknown default:
+                        fatalError("Unkown State Case")
                     }
-                    
+                case .finished:
+                    logger.trace("Finished")
+                    return
+                case .retry:
+                    logger.trace("Will retry")
+                    return
                 }
-            } catch {
-                logger.error("\(error.localizedDescription)")
+                
             }
+        } catch {
+            logger.error("\(error.localizedDescription)")
         }
     }
     
@@ -196,6 +209,7 @@ public final actor WhiteTipped {
     
     func notifyDisconnection(with error: NWError? = nil, _ reason: NWProtocolWebSocket.CloseCode) async {
         let result = DisconnectResult(error: error, code: reason)
+        receiverDelegate?.received(.disconnectPacket, packet: MessagePacket(disconnectPacket: result))
         await MainActor.run {
             receiver.disconnectionPacketReceived = result
         }
@@ -204,74 +218,82 @@ public final actor WhiteTipped {
     
     private func monitorConnection(_ betterPath: Bool = false) async  {
         //AsyncPublish prevents currentState from finishing the suspension
-        if #available(iOS 15, macOS 12, *) {
-            for await state in connectionState.$currentState.values {
-                switch state {
-                case .setup:
-                    logger.trace("Connection setup")
-                case .waiting(let status):
-                    logger.trace("Connection waiting with status - Status: \(status.localizedDescription)")
-                case .preparing:
-                    logger.trace("Connection preparing")
-                case .ready:
-                    logger.trace("Connection established")
-                    if betterPath == true {
-                        logger.trace("We found a better path")
-                        self.connection = nil
-                        guard let endpoint = endpoint else { return }
-                        guard let parameters = parameters else { return }
-                        let newConnection = NWConnection(to: endpoint, using: parameters)
-                        newConnection.start(queue: nwQueue)
-                        await pathHandlers()
-                        self.connection = newConnection
+        for await state in connectionState.$currentState.values {
+            switch state {
+            case .setup:
+                logger.trace("Connection setup")
+            case .waiting(let status):
+                logger.trace("Connection waiting with status - Status: \(status.localizedDescription)")
+            case .preparing:
+                logger.trace("Connection preparing")
+                Task.detached {
+                    do {
+                        try await Task.sleep(until: .now + .seconds(self.connectionTimeout), clock: .suspending)
+                        if await self.connection?.state != .ready {
+                            await self.connection?.stateUpdateHandler?(.failed(.posix(.ETIMEDOUT)))
+                        }
+                    } catch {
+                        self.logger.error("\(error.localizedDescription)")
                     }
-                    receiveAndFeed()
-                    await MainActor.run {
-                        receiver.connectionStatus = true
-                    }
-                case .failed(let error):
-                    logger.trace("Connection failed with error - Error: \(error.localizedDescription)")
-                    connection?.cancel()
-                    await notifyDisconnection(with: error, .protocolCode(.abnormalClosure))
-                    await MainActor.run {
-                        receiver.connectionStatus = false
-                    }
-                case .cancelled:
-                    logger.trace("Connection cancelled")
-                    await notifyDisconnection(.protocolCode(.normalClosure))
-                    await MainActor.run {
-                        receiver.connectionStatus = false
-                    }
-                default:
-                    logger.trace("Connection default")
-                    return
                 }
-                if state == .ready { break }
+            case .ready:
+                logger.trace("Connection established")
+                if betterPath == true {
+                    logger.trace("We found a better path")
+                    self.connection = nil
+                    guard let endpoint = endpoint else { return }
+                    guard let parameters = parameters else { return }
+                    let newConnection = NWConnection(to: endpoint, using: parameters)
+                    newConnection.start(queue: nwQueue)
+                    await pathHandlers()
+                    self.connection = newConnection
+                }
+                receiveAndFeed()
+                receiverDelegate?.received(.connectionStatus, packet: MessagePacket(connectionStatus: true))
+                await MainActor.run {
+                    receiver.connectionStatus = true
+                }
+            case .failed(let error):
+                logger.trace("Connection failed with error - Error: \(error.localizedDescription)")
+                connection?.cancel()
+                await notifyDisconnection(with: error, .protocolCode(.abnormalClosure))
+                receiverDelegate?.received(.connectionStatus, packet: MessagePacket(connectionStatus: false))
+                await MainActor.run {
+                    receiver.connectionStatus = false
+                }
+            case .cancelled:
+                logger.trace("Connection cancelled")
+                await notifyDisconnection(.protocolCode(.normalClosure))
+                receiverDelegate?.received(.connectionStatus, packet: MessagePacket(connectionStatus: false))
+                await MainActor.run {
+                    receiver.connectionStatus = false
+                }
+            default:
+                logger.trace("Connection default")
+                return
             }
         }
     }
     
     
     private func betterPath() async {
-        if #available(iOS 15, macOS 12, *) {
-            for await result in connectionState.$betterPath.values {
-                await MainActor.run {
-                    receiver.betterPathReceived = result
-                }
-                break
+        for await result in connectionState.$betterPath.values {
+            receiverDelegate?.received(.betterPath, packet: MessagePacket(betterPath: result))
+            await MainActor.run {
+                receiver.betterPathReceived = result
             }
+            break
         }
     }
     
     
     private func viablePath() async {
-        if #available(iOS 15, macOS 12, *) {
-            for await result in connectionState.$viablePath.values {
-                await MainActor.run {
-                    receiver.viablePathReceived = result
-                }
-                break
+        for await result in connectionState.$viablePath.values {
+            receiverDelegate?.received(.viablePath, packet: MessagePacket(viablePath: result))
+            await MainActor.run {
+                receiver.viablePathReceived = result
             }
+            break
         }
     }
     
@@ -293,7 +315,7 @@ public final actor WhiteTipped {
     public func ping(interval: TimeInterval) async throws {
         let date = RunLoop.timeInterval(interval)
         repeat {
-            try? await Task.sleep(nanoseconds: NSEC_PER_SEC)
+            try await Task.sleep(nanoseconds: NSEC_PER_SEC * UInt64(interval))
             if canRun {
                 try await sendPing()
             }
@@ -342,6 +364,317 @@ public final actor WhiteTipped {
                     }
                 }))
         })
+    }
+}
+
+@available(macOS 10.15, iOS 14, tvOS 13, watchOS 6, *)
+public final class WhiteTipped: NSObject {
+    
+    public var headers: [String: String]?
+    public var urlRequest: URLRequest?
+    public var cookies: [HTTPCookie]
+    private var canRun: Bool = true
+    private var connection: NWConnection?
+    private var parameters: NWParameters?
+    private var endpoint: NWEndpoint?
+    let logger: Logger = Logger(subsystem: "WhiteTipped", category: "NWConnection")
+    weak var receiver: WhiteTippedRecieverProtocol?
+    var nwQueue = DispatchQueue(label: "WTK")
+    let connectionState = NWConnectionState()
+    var pingInterval: TimeInterval = 1.0
+    var connectionTimeout: Int = 7
+    
+    public func setDelegate(_ conformer: WhiteTippedRecieverProtocol) {
+        self.receiver = conformer
+    }
+    
+    public init(
+        headers: [String: String]?,
+        urlRequest: URLRequest?,
+        cookies: [HTTPCookie],
+        pingInterval: TimeInterval,
+        connectionTimeout: Int
+    ) {
+        self.headers = headers
+        self.urlRequest = urlRequest
+        self.cookies = cookies
+        self.pingInterval = pingInterval
+        self.connectionTimeout = connectionTimeout
+    }
+    
+    deinit {}
+    
+    public func connect(url: URL, trustAll: Bool, certificates: [String]?) {
+        canRun = true
+        endpoint = .url(url)
+        
+        let options = NWProtocolWebSocket.Options()
+        options.autoReplyPing = true
+        //Limit Message size to 16MB to prevent abuse
+        options.maximumMessageSize = 1_000_000 * 16
+        
+        if urlRequest != nil {
+            options.setAdditionalHeaders(urlRequest?.allHTTPHeaderFields?.map { ($0.key, $0.value) } ?? [])
+            _ = self.cookies.map { cookie in
+                options.setAdditionalHeaders([(name: cookie.name, value: cookie.value)])
+            }
+        }
+        if headers != nil {
+            options.setAdditionalHeaders(headers?.map { ($0.key, $0.value) } ?? [])
+        }
+        if trustAll {
+            do  {
+                parameters = try TLSConfiguration.trustSelfSigned(nwQueue, certificates: certificates, logger: logger)
+            } catch {
+                fatalError(error.localizedDescription)
+            }
+        } else {
+            parameters = (url.scheme == "ws" ? .tcp : .tls)
+        }
+        
+        parameters?.defaultProtocolStack.applicationProtocols.insert(options, at: 0)
+        
+        guard let endpoint = endpoint else { return }
+        guard let parameters = parameters else { return }
+        connection = NWConnection(to: endpoint, using: parameters)
+        connection?.start(queue: nwQueue)
+        
+        pathHandlers()
+        monitorConnection()
+    }
+    
+    
+    private func pathHandlers() {
+        connection?.stateUpdateHandler = { [weak self] state in
+            guard let strongSelf = self else {return}
+            strongSelf.connectionState.currentState(state)
+        }
+        
+        connection?.betterPathUpdateHandler = { [weak self] value in
+            guard let strongSelf = self else { return }
+            strongSelf.connectionState.betterPath(value)
+            strongSelf.receiver?.received(.betterPath, packet: MessagePacket(betterPath: value))
+        }
+        
+        connection?.viabilityUpdateHandler = { [weak self] value in
+            guard let strongSelf = self else {return}
+            strongSelf.connectionState.viablePath(value)
+            strongSelf.receiver?.received(.viablePath, packet: MessagePacket(viablePath: value))
+        }
+    }
+    
+    private struct Listener {
+        var data: Data
+        var context: NWConnection.ContentContext
+    }
+    
+    
+    private func receiveAndFeed() {
+        connection?.receiveMessage(completion: { completeContent, contentContext, isComplete, error in
+            let listener = ListenerStruct(data: completeContent, context: contentContext, isComplete: isComplete)
+            self.channelRead(listener)
+            if error == nil {
+                self.receiveAndFeed()
+            }
+        })
+    }
+    
+    
+    private func channelRead(_ listener: ListenerStruct) {
+        guard let metadata = listener.context?.protocolMetadata.first as? NWProtocolWebSocket.Metadata else { return }
+        switch metadata.opcode {
+        case .cont:
+            logger.trace("Received continuous WebSocketFrame")
+            return
+        case .text:
+            logger.trace("Received text WebSocketFrame")
+            guard let data = listener.data else { return }
+            guard let text = String(data: data, encoding: .utf8) else { return }
+            receiver?.received(.text, packet: MessagePacket(text: text))
+            return
+        case .binary:
+            logger.trace("Received binary WebSocketFrame")
+            guard let data = listener.data else { return }
+            receiver?.received(.binary, packet: MessagePacket(binary: data))
+            return
+        case .close:
+            logger.trace("Received close WebSocketFrame")
+            connection?.cancel()
+            notifyDisconnection(.protocolCode(.goingAway))
+            return
+        case .ping:
+            logger.trace("Received ping WebSocketFrame")
+            return
+        case .pong:
+            logger.trace("Received pong WebSocketFrame")
+            do {
+                try ping(interval: 3)
+            } catch {
+                logger.error("\(error)")
+            }
+            return
+        @unknown default:
+            fatalError("Unkown State Case")
+        }
+    }
+    
+    
+    public func disconnect(code: NWProtocolWebSocket.CloseCode = .protocolCode(.normalClosure)) throws {
+        canRun = false
+        if code == .protocolCode(.normalClosure) {
+            connection?.cancel()
+            notifyDisconnection(code)
+        } else {
+            let metadata = NWProtocolWebSocket.Metadata(opcode: .close)
+            metadata.closeCode = code
+            notifyDisconnection(code)
+            let context = NWConnection.ContentContext(identifier: "close", metadata: [metadata])
+            try send(data: nil, context: context)
+        }
+    }
+    
+    
+    func notifyDisconnection(with error: NWError? = nil, _ reason: NWProtocolWebSocket.CloseCode) {
+        let result = DisconnectResult(error: error, code: reason)
+        receiver?.received(.disconnectPacket, packet: MessagePacket(disconnectPacket: result))
+    }
+    
+    
+    public func onCurrentState(_ callback: @escaping (NWConnection.State) -> ()) {
+        self.connectionState.currentState = callback
+    }
+    
+    public func onBetterPath(_ callback: @escaping (Bool) -> ()) {
+        self.connectionState.betterPath = callback
+    }
+    
+    public func onViablePath(_ callback: @escaping (Bool) -> ()) {
+        self.connectionState.viablePath = callback
+    }
+    
+    public func onListenerState(_ callback: @escaping (NWListener.State) -> ()) {
+        self.connectionState.listenerState = callback
+    }
+    
+    public func onConnection(_ callback: @escaping (NWConnection) -> ()) {
+        self.connectionState.connection = callback
+    }
+    
+    private func monitorConnection() {
+        onCurrentState { [weak self] state in
+            guard let strongSelf = self else { return }
+            switch state {
+            case .setup:
+                strongSelf.logger.trace("Connection setup")
+            case .waiting(let status):
+                strongSelf.logger.trace("Connection waiting with status - Status: \(status.localizedDescription)")
+            case .preparing:
+                strongSelf.logger.trace("Connection preparing")
+                DispatchQueue.global(qos: .background).asyncAfter(deadline: .now() + .seconds(strongSelf.connectionTimeout)) { [weak self] in
+                    guard let strongSelf = self else { return }
+                    if strongSelf.connection?.state != .ready {
+                        strongSelf.connection?.stateUpdateHandler?(.failed(.posix(.ETIMEDOUT)))
+                    }
+                }
+            case .ready:
+                strongSelf.logger.trace("Connection established")
+                strongSelf.onBetterPath { [weak self] betterPath in
+                    guard let strongSelf = self else { return }
+                    if betterPath {
+                        strongSelf.logger.trace("We found a better path")
+                        strongSelf.connection = nil
+                        guard let endpoint = strongSelf.endpoint else { return }
+                        guard let parameters = strongSelf.parameters else { return }
+                        let newConnection = NWConnection(to: endpoint, using: parameters)
+                        newConnection.start(queue: strongSelf.nwQueue)
+                        strongSelf.pathHandlers()
+                        strongSelf.connection = newConnection
+                        strongSelf.connectionState.connection(newConnection)
+                    }
+                }
+                strongSelf.receiveAndFeed()
+                DispatchQueue.main.async { [weak self] in
+                    guard let strongSelf = self else { return }
+                    strongSelf.receiver?.received(.connectionStatus, packet: MessagePacket(connectionStatus: true))
+                }
+            case .failed(let error):
+                strongSelf.logger.trace("Connection failed with error - Error: \(error.localizedDescription)")
+                strongSelf.connection?.cancel()
+                strongSelf.notifyDisconnection(with: error, .protocolCode(.abnormalClosure))
+                strongSelf.receiver?.received(.connectionStatus, packet: MessagePacket(connectionStatus: false))
+            case .cancelled:
+                strongSelf.logger.trace("Connection cancelled")
+                strongSelf.notifyDisconnection(.protocolCode(.normalClosure))
+                DispatchQueue.main.async { [weak self] in
+                    guard let strongSelf = self else { return }
+                    strongSelf.receiver?.received(.connectionStatus, packet: MessagePacket(connectionStatus: false))
+                }
+            default:
+                strongSelf.logger.trace("Connection default")
+                return
+            }
+        }
+    }
+    
+    public func sendText(_ text: String) throws {
+        guard let data = text.data(using: .utf8) else { return }
+        let metadata = NWProtocolWebSocket.Metadata(opcode: .text)
+        let context = NWConnection.ContentContext(identifier: "text", metadata: [metadata])
+        try send(data: data, context: context)
+    }
+    
+    
+    public func sendBinary(_ data: Data) throws {
+        let metadata = NWProtocolWebSocket.Metadata(opcode: .binary)
+        let context = NWConnection.ContentContext(identifier: "text", metadata: [metadata])
+        try send(data: data, context: context)
+    }
+    
+    public func ping(interval: TimeInterval) throws {
+        DispatchQueue.global(qos: .background).asyncAfter(deadline:  .now() + interval) { [weak self] in
+            guard let strongSelf = self else { return }
+            do {
+                try strongSelf.sendPing()
+            } catch {
+                strongSelf.logger.error("\(error.localizedDescription)")
+            }
+        }
+    }
+    
+    
+    func sendPing() throws {
+        let metadata = NWProtocolWebSocket.Metadata(opcode: .ping)
+        pongHandler(metadata)
+        let context = NWConnection.ContentContext(
+            identifier: "ping",
+            metadata: [metadata]
+        )
+        try send(data: "ping".data(using: .utf8), context: context)
+    }
+    
+    
+    func pongHandler(_ metadata: NWProtocolWebSocket.Metadata) {
+        metadata.setPongHandler(nwQueue) { [weak self] error in
+            guard let strongSelf = self else { return }
+            if let error = error {
+                strongSelf.logger.error("Error: \(error.debugDescription)")
+            }
+        }
+    }
+    
+    
+    func send(data: Data?, context: NWConnection.ContentContext) throws {
+        connection?.send(
+            content: data,
+            contentContext: context,
+            isComplete: true,
+            completion: .contentProcessed({ [weak self] error in
+                guard let strongSelf = self else { return }
+                if let error = error {
+                    strongSelf.logger.error("\(error.localizedDescription)")
+                }
+            }))
+        receiveAndFeed()
     }
 }
 #endif

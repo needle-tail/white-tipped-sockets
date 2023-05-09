@@ -17,7 +17,7 @@ public class TLSConfiguration{
                                 queue: DispatchQueue,
                                 certificates: [String]?,
                                 logger: Logger
-    ) async throws -> NWParameters {
+    ) throws -> NWParameters {
         let options = NWProtocolTLS.Options()
         
         var secTrustRoots: [SecCertificate]?
