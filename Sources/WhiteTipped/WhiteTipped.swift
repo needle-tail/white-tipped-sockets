@@ -28,9 +28,9 @@ public final actor AsyncWhiteTipped: NSObject {
     
     
     public init(
-        headers: [String: String]?,
-        urlRequest: URLRequest?,
-        cookies: [HTTPCookie],
+        headers: [String: String] = [:],
+        urlRequest: URLRequest? = nil,
+        cookies: [HTTPCookie] = [],
         pingInterval: TimeInterval,
         connectionTimeout: Int
     ) {
@@ -42,7 +42,7 @@ public final actor AsyncWhiteTipped: NSObject {
     }
     
     
-    var nwQueue = DispatchQueue(label: "WTK")
+    var nwQueue = DispatchQueue(label: "WTS")
     let connectionState = ObservableNWConnectionState()
     var stateCancellable: Cancellable?
     var betterPathCancellable: Cancellable?
@@ -90,20 +90,20 @@ public final actor AsyncWhiteTipped: NSObject {
     private func pathHandlers() async {
         stateCancellable = connectionState.publisher(for: \.currentState) as? Cancellable
         connection?.stateUpdateHandler = { [weak self] state in
-            guard let strongSelf = self else {return}
-            strongSelf.connectionState.currentState = state
+            guard let self else {return}
+            self.connectionState.currentState = state
         }
         
         betterPathCancellable = connectionState.publisher(for: \.betterPath) as? Cancellable
         connection?.betterPathUpdateHandler = { [weak self] value in
-            guard let strongSelf = self else {return}
-            strongSelf.connectionState.betterPath = value
+            guard let self else {return}
+            self.connectionState.betterPath = value
         }
         
         viablePatheCancellable = connectionState.publisher(for: \.viablePath) as? Cancellable
         connection?.viabilityUpdateHandler = { [weak self] value in
-            guard let strongSelf = self else {return}
-            strongSelf.connectionState.viablePath = value
+            guard let self else {return}
+            self.connectionState.viablePath = value
         }
     }
     
@@ -117,7 +117,8 @@ public final actor AsyncWhiteTipped: NSObject {
         connection?.receiveMessage(completion: { completeContent, contentContext, isComplete, error in
             let listener = ListenerStruct(data: completeContent, context: contentContext, isComplete: isComplete)
             
-            Task {
+            Task { [weak self] in
+                guard let self else { return }
                 await self.consumer.feedConsumer(listener)
                 do {
                     try await self.channelRead()
@@ -147,16 +148,18 @@ public final actor AsyncWhiteTipped: NSObject {
                         guard let data = listener.data else { return }
                         guard let text = String(data: data, encoding: .utf8) else { return }
                         receiverDelegate?.received(.text, packet: MessagePacket(text: text))
-                        await MainActor.run {
-                            receiver.textReceived = text
+                        Task { @MainActor [weak self] in
+                            guard let self else { return }
+                            self.receiver.textReceived = text
                         }
                         return
                     case .binary:
                         logger.trace("Received binary WebSocketFrame")
                         guard let data = listener.data else { return }
                         receiverDelegate?.received(.binary, packet: MessagePacket(binary: data))
-                        await MainActor.run {
-                            receiver.binaryReceived = data
+                        Task { @MainActor [weak self] in
+                            guard let self else { return }
+                            self.receiver.binaryReceived = data
                         }
                         return
                     case .close:
@@ -210,8 +213,9 @@ public final actor AsyncWhiteTipped: NSObject {
     func notifyDisconnection(with error: NWError? = nil, _ reason: NWProtocolWebSocket.CloseCode) async {
         let result = DisconnectResult(error: error, code: reason)
         receiverDelegate?.received(.disconnectPacket, packet: MessagePacket(disconnectPacket: result))
-        await MainActor.run {
-            receiver.disconnectionPacketReceived = result
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            self.receiver.disconnectionPacketReceived = result
         }
     }
     
@@ -226,7 +230,8 @@ public final actor AsyncWhiteTipped: NSObject {
                 logger.trace("Connection waiting with status - Status: \(status.localizedDescription)")
             case .preparing:
                 logger.trace("Connection preparing")
-                Task.detached {
+                Task.detached { [weak self] in
+                    guard let self else { return }
                     do {
                         try await Task.sleep(until: .now + .seconds(self.connectionTimeout), clock: .suspending)
                         if await self.connection?.state != .ready {
@@ -250,23 +255,26 @@ public final actor AsyncWhiteTipped: NSObject {
                 }
                 receiveAndFeed()
                 receiverDelegate?.received(.connectionStatus, packet: MessagePacket(connectionStatus: true))
-                await MainActor.run {
-                    receiver.connectionStatus = true
+                Task { @MainActor [weak self] in
+                    guard let self else { return }
+                    self.receiver.connectionStatus = true
                 }
             case .failed(let error):
                 logger.trace("Connection failed with error - Error: \(error.localizedDescription)")
                 connection?.cancel()
                 await notifyDisconnection(with: error, .protocolCode(.abnormalClosure))
                 receiverDelegate?.received(.connectionStatus, packet: MessagePacket(connectionStatus: false))
-                await MainActor.run {
-                    receiver.connectionStatus = false
+                Task { @MainActor [weak self] in
+                    guard let self else { return }
+                    self.receiver.connectionStatus = false
                 }
             case .cancelled:
                 logger.trace("Connection cancelled")
                 await notifyDisconnection(.protocolCode(.normalClosure))
                 receiverDelegate?.received(.connectionStatus, packet: MessagePacket(connectionStatus: false))
-                await MainActor.run {
-                    receiver.connectionStatus = false
+                Task { @MainActor [weak self] in
+                    guard let self else { return }
+                    self.receiver.connectionStatus = false
                 }
             default:
                 logger.trace("Connection default")
@@ -279,8 +287,9 @@ public final actor AsyncWhiteTipped: NSObject {
     private func betterPath() async {
         for await result in connectionState.$betterPath.values {
             receiverDelegate?.received(.betterPath, packet: MessagePacket(betterPath: result))
-            await MainActor.run {
-                receiver.betterPathReceived = result
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                self.receiver.betterPathReceived = result
             }
             break
         }
@@ -290,8 +299,9 @@ public final actor AsyncWhiteTipped: NSObject {
     private func viablePath() async {
         for await result in connectionState.$viablePath.values {
             receiverDelegate?.received(.viablePath, packet: MessagePacket(viablePath: result))
-            await MainActor.run {
-                receiver.viablePathReceived = result
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                self.receiver.viablePathReceived = result
             }
             break
         }
@@ -379,7 +389,7 @@ public final class WhiteTipped: NSObject {
     private var endpoint: NWEndpoint?
     let logger: Logger = Logger(subsystem: "WhiteTipped", category: "NWConnection")
     weak var receiver: WhiteTippedRecieverProtocol?
-    var nwQueue = DispatchQueue(label: "WTK")
+    var nwQueue = DispatchQueue(label: "WTS")
     let connectionState = NWConnectionState()
     var pingInterval: TimeInterval = 1.0
     var connectionTimeout: Int = 7
