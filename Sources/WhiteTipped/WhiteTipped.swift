@@ -142,7 +142,6 @@ public final actor AsyncWhiteTipped: NSObject {
                     switch metadata.opcode {
                     case .cont:
                         logger.trace("Received continuous WebSocketFrame")
-                        return
                     case .text:
                         logger.trace("Received text WebSocketFrame")
                         guard let data = listener.data else { return }
@@ -152,7 +151,6 @@ public final actor AsyncWhiteTipped: NSObject {
                             guard let self else { return }
                             self.receiver.textReceived = text
                         }
-                        return
                     case .binary:
                         logger.trace("Received binary WebSocketFrame")
                         guard let data = listener.data else { return }
@@ -161,18 +159,14 @@ public final actor AsyncWhiteTipped: NSObject {
                             guard let self else { return }
                             self.receiver.binaryReceived = data
                         }
-                        return
                     case .close:
                         logger.trace("Received close WebSocketFrame")
                         connection?.cancel()
                         await notifyDisconnection(.protocolCode(.goingAway))
-                        return
                     case .ping:
                         logger.trace("Received ping WebSocketFrame")
-                        return
                     case .pong:
                         logger.trace("Received pong WebSocketFrame")
-                        return
                     @unknown default:
                         fatalError("Unkown State Case")
                     }
@@ -225,11 +219,11 @@ public final actor AsyncWhiteTipped: NSObject {
         for await state in connectionState.$currentState.values {
             switch state {
             case .setup:
-                logger.trace("Connection setup")
+                logger.info("Connection setup")
             case .waiting(let status):
-                logger.trace("Connection waiting with status - Status: \(status.localizedDescription)")
+                logger.info("Connection waiting with status - Status: \(status.localizedDescription)")
             case .preparing:
-                logger.trace("Connection preparing")
+                logger.info("Connection preparing")
                 Task.detached { [weak self] in
                     guard let self else { return }
                     do {
@@ -242,7 +236,7 @@ public final actor AsyncWhiteTipped: NSObject {
                     }
                 }
             case .ready:
-                logger.trace("Connection established")
+                logger.info("Connection established")
                 if betterPath == true {
                     logger.trace("We found a better path")
                     self.connection = nil
@@ -260,7 +254,7 @@ public final actor AsyncWhiteTipped: NSObject {
                     self.receiver.connectionStatus = true
                 }
             case .failed(let error):
-                logger.trace("Connection failed with error - Error: \(error.localizedDescription)")
+                logger.info("Connection failed with error - Error: \(error.localizedDescription)")
                 connection?.cancel()
                 await notifyDisconnection(with: error, .protocolCode(.abnormalClosure))
                 receiverDelegate?.received(.connectionStatus, packet: MessagePacket(connectionStatus: false))
@@ -269,7 +263,7 @@ public final actor AsyncWhiteTipped: NSObject {
                     self.receiver.connectionStatus = false
                 }
             case .cancelled:
-                logger.trace("Connection cancelled")
+                logger.info("Connection cancelled")
                 await notifyDisconnection(.protocolCode(.normalClosure))
                 receiverDelegate?.received(.connectionStatus, packet: MessagePacket(connectionStatus: false))
                 Task { @MainActor [weak self] in
@@ -277,7 +271,7 @@ public final actor AsyncWhiteTipped: NSObject {
                     self.receiver.connectionStatus = false
                 }
             default:
-                logger.trace("Connection default")
+                logger.info("Connection default")
                 return
             }
         }
