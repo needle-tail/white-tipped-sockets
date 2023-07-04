@@ -10,6 +10,11 @@ import Foundation
 import Network
 
 @available(macOS 10.15, iOS 13, tvOS 13, watchOS 6, *)
+public class ListenerReceiver: NSObject, ObservableObject {
+    @Published public var listenerStruct: ListenerStruct?
+}
+
+@available(macOS 10.15, iOS 13, tvOS 13, watchOS 6, *)
 public class ObservableNWConnectionState: NSObject, ObservableObject {
     @Published public var currentState: NWConnection.State = .setup
     @Published public var listenerState: NWListener.State = .setup

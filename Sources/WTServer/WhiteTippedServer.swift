@@ -12,6 +12,7 @@ import OSLog
 import Combine
 import WTHelpers
 
+@available(iOS 15, macOS 12, *)
 public final actor WhiteTippedServer {
     
     public var headers: [String: String]?
@@ -21,9 +22,9 @@ public final actor WhiteTippedServer {
     private var listener: NWListener?
     private var parameters: NWParameters?
     private var endpoint: NWEndpoint?
-    @available(iOS 14, *)
+
     let logger: Logger = Logger(subsystem: "WhiteTipped", category: "NWConnection")
-    private var consumer = ListenerConsumer()
+//    private var consumer = ListenerConsumer()
     //    @MainActor public var receiver = WhiteTippedReciever()
     
     
@@ -47,7 +48,7 @@ public final actor WhiteTippedServer {
     public func listen() async {
         canRun = true
         do {
-            let parameters = try await TLSConfiguration.trustSelfSigned(nwQueue, certificates: nil, logger: logger)
+            let parameters = try TLSConfiguration.trustSelfSigned(nwQueue, certificates: nil)
             
             let options = NWProtocolWebSocket.Options()
             options.autoReplyPing = true
@@ -157,90 +158,90 @@ public final actor WhiteTippedServer {
     
     
     private func channelRead() async throws {
-        do {
-            for try await result in ListenerSequence(consumer: consumer) {
-                switch result {
-                case .success(let listener):
-                    guard let metadata = listener.context?.protocolMetadata.first as? NWProtocolWebSocket.Metadata else { return }
-                    switch metadata.opcode {
-                    case .cont:
-                        if #available(iOS 14, *) {
-                            logger.trace("Received continuous WebSocketFrame")
-                        } else {
-                            print("Received continuous WebSocketFrame")
-                        }
-                        return
-                    case .text:
-                        if #available(iOS 14, *) {
-                            logger.trace("Received text WebSocketFrame")
-                        } else {
-                            print("Received text WebSocketFrame")
-                        }
-                        guard let data = listener.data else { return }
-                        guard let text = String(data: data, encoding: .utf8) else { return }
-                        guard let session = listener.session else { return }
-                        try await sendText(session, text: text)
-                        return
-                    case .binary:
-                        if #available(iOS 14, *) {
-                            logger.trace("Received binary WebSocketFrame")
-                        } else {
-                            print("Received binary WebSocketFrame")
-                        }
-                        guard let data = listener.data else { return }
-                        guard let session = listener.session else { return }
-                        try await sendBinary(session, data: data)
-                        return
-                    case .close:
-                        if #available(iOS 14, *) {
-                            logger.trace("Received close WebSocketFrame")
-                        } else {
-                            print("Received close WebSocketFrame")
-                        }
-                        return
-                    case .ping:
-                        if #available(iOS 14, *) {
-                            logger.trace("Received ping WebSocketFrame")
-                        } else {
-                            print("Received ping WebSocketFrame")
-                        }
-                        guard let session = listener.session else { return }
-                        try await sendPong(session)
-                        return
-                    case .pong:
-                        if #available(iOS 14, *) {
-                            logger.trace("Received pong WebSocketFrame")
-                        } else {
-                            print("Received pong WebSocketFrame")
-                        }
-                        return
-                    @unknown default:
-                        fatalError("Unkown State Case")
-                    }
-                case .finished:
-                    if #available(iOS 14, *) {
-                        logger.trace("Finished")
-                    } else {
-                        print("Finished")
-                    }
-                    return
-                case .retry:
-                    if #available(iOS 14, *) {
-                        logger.trace("Will retry")
-                    } else {
-                        print("Will retry")
-                    }
-                    return
-                }
-                
-            }
-        } catch {
-            if #available(iOS 14, *) {
-                logger.error("\(error.localizedDescription)")
-            } else {
-                print("\(error.localizedDescription)")
-            }
-        }
+//        do {
+//            for try await result in ListenerSequence(consumer: consumer) {
+//                switch result {
+//                case .success(let listener):
+//                    guard let metadata = listener.context?.protocolMetadata.first as? NWProtocolWebSocket.Metadata else { return }
+//                    switch metadata.opcode {
+//                    case .cont:
+//                        if #available(iOS 14, *) {
+//                            logger.trace("Received continuous WebSocketFrame")
+//                        } else {
+//                            print("Received continuous WebSocketFrame")
+//                        }
+//                        return
+//                    case .text:
+//                        if #available(iOS 14, *) {
+//                            logger.trace("Received text WebSocketFrame")
+//                        } else {
+//                            print("Received text WebSocketFrame")
+//                        }
+//                        guard let data = listener.data else { return }
+//                        guard let text = String(data: data, encoding: .utf8) else { return }
+//                        guard let session = listener.session else { return }
+//                        try await sendText(session, text: text)
+//                        return
+//                    case .binary:
+//                        if #available(iOS 14, *) {
+//                            logger.trace("Received binary WebSocketFrame")
+//                        } else {
+//                            print("Received binary WebSocketFrame")
+//                        }
+//                        guard let data = listener.data else { return }
+//                        guard let session = listener.session else { return }
+//                        try await sendBinary(session, data: data)
+//                        return
+//                    case .close:
+//                        if #available(iOS 14, *) {
+//                            logger.trace("Received close WebSocketFrame")
+//                        } else {
+//                            print("Received close WebSocketFrame")
+//                        }
+//                        return
+//                    case .ping:
+//                        if #available(iOS 14, *) {
+//                            logger.trace("Received ping WebSocketFrame")
+//                        } else {
+//                            print("Received ping WebSocketFrame")
+//                        }
+//                        guard let session = listener.session else { return }
+//                        try await sendPong(session)
+//                        return
+//                    case .pong:
+//                        if #available(iOS 14, *) {
+//                            logger.trace("Received pong WebSocketFrame")
+//                        } else {
+//                            print("Received pong WebSocketFrame")
+//                        }
+//                        return
+//                    @unknown default:
+//                        fatalError("Unkown State Case")
+//                    }
+//                case .finished:
+//                    if #available(iOS 14, *) {
+//                        logger.trace("Finished")
+//                    } else {
+//                        print("Finished")
+//                    }
+//                    return
+//                case .retry:
+//                    if #available(iOS 14, *) {
+//                        logger.trace("Will retry")
+//                    } else {
+//                        print("Will retry")
+//                    }
+//                    return
+//                }
+//                
+//            }
+//        } catch {
+//            if #available(iOS 14, *) {
+//                logger.error("\(error.localizedDescription)")
+//            } else {
+//                print("\(error.localizedDescription)")
+//            }
+//        }
     }
     
     

@@ -6,6 +6,7 @@ import NIOPosix
 import Foundation
 import DotEnv
 
+@available(iOS 13, macOS 12, *)
 public class WTNIOServer {
     
     let port: Int
