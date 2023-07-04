@@ -69,8 +69,8 @@ let package = Package(
             dependencies: [
                 "WhiteTipped",
                 "WTHelpers",
-                "WTServer",
-                .product(name: "AsyncAlgorithms", package: "swift-async-algorithms")
+                "WTServer"
+//                .product(name: "AsyncAlgorithms", package: "swift-async-algorithms")
             ])
     ]
 )

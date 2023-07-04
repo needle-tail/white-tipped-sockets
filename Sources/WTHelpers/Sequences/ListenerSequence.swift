@@ -9,7 +9,7 @@ import Foundation
 import DequeModule
 import Atomics
 
-
+@available(iOS 13.0, *)
 public struct WhiteTippedAsyncSequence<T>: AsyncSequence {
 
     public typealias Element = WTASequenceStateMachine.WTASequenceResult<T>
@@ -26,7 +26,7 @@ public struct WhiteTippedAsyncSequence<T>: AsyncSequence {
     
     
 }
-
+@available(iOS 13.0, *)
 extension WhiteTippedAsyncSequence {
     public struct Iterator<T>: AsyncIteratorProtocol {
         
@@ -54,7 +54,8 @@ extension WhiteTippedAsyncSequence {
         }
     }
 }
-   
+
+@available(iOS 13.0, *)
 public actor WhiteTippedAsyncConsumer<T> {
     
     public var deque = Deque<T>()
@@ -81,6 +82,7 @@ public actor WhiteTippedAsyncConsumer<T> {
     }
 }
 
+@available(iOS 13.0, *)
 public final class WTASequenceStateMachine: Sendable {
     
     public init() {}
