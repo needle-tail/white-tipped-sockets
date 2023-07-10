@@ -11,7 +11,7 @@ import Foundation
 @available(macOS 10.15, iOS 13, tvOS 13, watchOS 6, *)
 public struct DisconnectResult: Sendable {
     public var error: NWError?
-    public var code: NWProtocolWebSocket.CloseCode
+    public var code: NWProtocolWebSocket.CloseCode?
 }
 
 @available(macOS 10.15, iOS 13, tvOS 13, watchOS 6, *)
@@ -39,7 +39,7 @@ public enum MessagePacket {
 }
 
 @available(macOS 10.15, iOS 13, tvOS 13, watchOS 6, *)
-public protocol WhiteTippedRecieverDelegate: AnyObject {
+public protocol WhiteTippedRecieverDelegate: AnyObject, Sendable {
     func received(message packet: MessagePacket) async throws
     func received(_ packet: MessagePacket)
 }

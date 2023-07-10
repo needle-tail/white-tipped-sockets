@@ -11,9 +11,9 @@ let package = Package(
         .library(
             name: "WhiteTippedSockets",
             targets: ["WhiteTipped"]),
-//        .executable(
-//            name: "WhiteTippedServer",
-//            targets: ["WTServer"]),
+        .executable(
+            name: "WhiteTippedServer",
+            targets: ["WTServer"]),
         .library(
             name: "WhiteTippedNIOSockets",
             targets: ["WTNIOSockets"]),
@@ -40,27 +40,21 @@ let package = Package(
         .target(
             name: "WhiteTipped",
             dependencies: ["WTHelpers"]),
-//        .executableTarget(
-//            name: "WTServer",
-//            dependencies: ["WTHelpers"]),
-        .target(name: "WTNIOSockets",
-               dependencies: [
-                .product(name: "NIO", package: "swift-nio"),
-                .product(name: "NIOHTTP1", package: "swift-nio"),
-                .product(name: "NIOWebSocket", package: "swift-nio"),
-                .product(name: "NIOSSL", package: "swift-nio-ssl"),
-                .product(name: "DotEnv", package: "DotEnv"),
-                "WTHelpers"
-               ]),
         .target(
-            name: "WTHelpers",
-            dependencies: [
-                .product(name: "Atomics", package: "swift-atomics"),
-                .product(name: "DequeModule", package: "swift-collections")
-            ]),
-        .target(
-            name: "WTServer",
+            name: "WhiteTippedListener",
             dependencies: ["WTHelpers"]),
+        .executableTarget(
+            name: "WTServer",
+            dependencies: ["WhiteTippedListener"]),
+        .target(name: "WTNIOSockets",
+                dependencies: [
+                    .product(name: "NIO", package: "swift-nio"),
+                    .product(name: "NIOHTTP1", package: "swift-nio"),
+                    .product(name: "NIOWebSocket", package: "swift-nio"),
+                    .product(name: "NIOSSL", package: "swift-nio-ssl"),
+                    .product(name: "DotEnv", package: "DotEnv"),
+                    "WTHelpers"
+                ]),
         .executableTarget(
             name: "WTNIOServer",
             dependencies: ["WTNIOSockets"]),
@@ -69,8 +63,14 @@ let package = Package(
             dependencies: [
                 "WhiteTipped",
                 "WTHelpers",
-                "WTServer"
-//                .product(name: "AsyncAlgorithms", package: "swift-async-algorithms")
+                "WTServer",
+                .product(name: "AsyncAlgorithms", package: "swift-async-algorithms")
+            ]),
+        .target(
+            name: "WTHelpers",
+            dependencies: [
+                .product(name: "Atomics", package: "swift-atomics"),
+                .product(name: "DequeModule", package: "swift-collections")
             ])
     ]
 )

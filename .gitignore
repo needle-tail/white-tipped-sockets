@@ -11,3 +11,6 @@ DerivedData/
 *.key
 *.cer
 *.env
+*.xcarchive
+*.xcframework
+build

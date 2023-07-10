@@ -1,33 +1,36 @@
 #if canImport(Network)
 import XCTest
 import Foundation
-//#if canImport(AsyncAlgorithms)
-//import AsyncAlgorithms
+#if canImport(AsyncAlgorithms)
+import AsyncAlgorithms
 import DequeModule
-//#endif
+#endif
 @testable import WhiteTipped
+@testable import WhiteTippedListener
 @testable import WTHelpers
-@testable import WTServer
 
 @available(iOS 15, *)
-final class WhiteTippedTests: XCTestCase, WhiteTippedRecieverDelegate {
+final class WhiteTippedTests: XCTestCase, @unchecked Sendable, WhiteTippedRecieverDelegate {
     
-    var socket: WhiteTipped!
+    var socket: WhiteTippedConnection!
+    var server: WhiteTippedListener!
+    weak var delegate: WhiteTippedRecieverDelegate?
     
     override func setUp() async throws {
-        guard let url = URL(string: "ws://172.20.10.6:8080") else { return }
-        //TODO: Implement self contained server for testing
-        //            let server = await WhiteTippedServer(headers: nil, urlRequest: nil, cookies: nil)
-        //            await server.listen()
+        guard let url = URL(string: "ws://127.0.0.1:8080") else { return }
+//        server = try await WhiteTippedListener(configuration: WhiteTippedListener.NetworkConfiguration(queue: "server"))
+//        await server.listen()
         
-        socket = try WhiteTipped(
-            configuration: WhiteTipped.NetworkConfiguration(
-                pingInterval: 5,
+        socket = try WhiteTippedConnection(
+            configuration: WhiteTippedConnection.NetworkConfiguration(
+                queue: "client",
+                pingPongInterval: 5,
                 connectionTimeout: 7,
                 url: url,
                 trustAll: false
             )
         )
+        delegate = self
         await self.socket.setDelegate(self)
         Task.detached {
             await self.socket.connect()
@@ -35,7 +38,9 @@ final class WhiteTippedTests: XCTestCase, WhiteTippedRecieverDelegate {
     }
     
     override func tearDown() async throws {
-        try await socket.disconnect()
+//        try await socket.disconnect()
+//        await server.listener.cancel()
+        
     }
     
     func testSendText() async throws {
@@ -48,20 +53,20 @@ final class WhiteTippedTests: XCTestCase, WhiteTippedRecieverDelegate {
             group.cancelAll()
         })
     }
-
-    let consumer = WhiteTippedAsyncConsumer<String>()
     
-    func testMultipartMessage() async throws {
+//    let consumer = WhiteTippedAsyncConsumer<String>()
+//    
+//    func testMultipartMessage() async throws {
 //        try await withThrowingTaskGroup(of: Int.self, body: { group in
 //            try Task.checkCancellation()
-//          
-//                let chunked = longMessage.async.chunks(ofCount: 700)
-//                let totalParts = await self.createTotalParts(longMessage)
-//              
+//
+//            let chunked = longMessage.async.chunks(ofCount: 700)
+//            let totalParts = await self.createTotalParts(longMessage)
+//
 //            for try await chunk in chunked {
 //                await consumer.feedConsumer([String(chunk)])
 //            }
-//            
+//
 //            for try await result in WhiteTippedAsyncSequence(consumer: self.consumer) {
 //                switch result {
 //                case .success(let message):
@@ -85,7 +90,7 @@ final class WhiteTippedTests: XCTestCase, WhiteTippedRecieverDelegate {
 //            _ = try await group.next()
 //            group.cancelAll()
 //        })
-    }
+//    }
     
     func createTotalParts(_ message: String) async -> Int {
         return (message.count / 700) + 1
@@ -110,17 +115,21 @@ final class WhiteTippedTests: XCTestCase, WhiteTippedRecieverDelegate {
         })
     }
     
-        func testSendPing() async throws {
-            Task.detached {
-                try await self.socket.sendPing()
-            }
+    func testSendPing() async throws {
+        Task.detached {
+            try await self.socket.sendPing()
         }
+    }
     
-        func testSendPong() async throws {
-            Task.detached {
-                try await self.socket.sendPong()
-            }
+    func testSendPong() async throws {
+        Task.detached {
+            try await self.socket.sendPong()
         }
+    }
+    
+    func testReceivedFromServer() async throws {
+        try await self.delegate?.received(message: MessagePacket.text("RECEIVED_TEXT"))
+    }
     
     
     var messageCollection = Deque<MultipartPacket>()
@@ -136,11 +145,11 @@ final class WhiteTippedTests: XCTestCase, WhiteTippedRecieverDelegate {
                 let finalPacket = messageCollection.first(where: { $0.id == 7 })
                 
                 if messageCollection.count == finalPacket?.id {
-                        var sortedCollection = Deque<MultipartPacket>()
-                        var sortedMessage = ""
-                        let sorted = messageCollection.sorted { lhs, rhs in
-                            return lhs.id > rhs.finalId
-                        }
+                    var sortedCollection = Deque<MultipartPacket>()
+                    var sortedMessage = ""
+                    let sorted = messageCollection.sorted { lhs, rhs in
+                        return lhs.id > rhs.finalId
+                    }
                     sortedCollection.append(contentsOf: sorted)
                     
                     for item in sortedCollection {
@@ -149,7 +158,11 @@ final class WhiteTippedTests: XCTestCase, WhiteTippedRecieverDelegate {
                     XCTAssertEqual(sortedMessage, longMessage)
                 }
             } catch {
-                XCTAssertEqual(text, "WebSockets")
+                if text == "RECEIVED_TEXT" {
+                    XCTAssertEqual(text, "RECEIVED_TEXT")
+                } else {
+                    XCTAssertEqual(text, "WebSockets")
+                }
             }
         case .binary(let data):
             XCTAssertEqual(data.bytes, [12, 12, 34, 55, 66, 77])

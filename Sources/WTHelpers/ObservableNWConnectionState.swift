@@ -11,7 +11,7 @@ import Network
 
 @available(macOS 10.15, iOS 13, tvOS 13, watchOS 6, *)
 public class ListenerReceiver: NSObject, ObservableObject {
-    @Published public var listenerStruct: ListenerStruct?
+    @Published public var listenerStruct: WhiteTippedMesssage?
 }
 
 @available(macOS 10.15, iOS 13, tvOS 13, watchOS 6, *)
