@@ -9,6 +9,7 @@ import Foundation
 import NIOCore
 import NIOWebSocket
 
+@available(iOS 13, macOS 12, *)
 public class WebSocket {
     
     var channel: Channel

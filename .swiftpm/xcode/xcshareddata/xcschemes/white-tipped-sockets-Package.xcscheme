@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <Scheme
-   LastUpgradeVersion = "1340"
+   LastUpgradeVersion = "1430"
    version = "1.3">
    <BuildAction
       parallelizeBuildables = "YES"
@@ -157,6 +157,20 @@
                BlueprintIdentifier = "WTNIOSockets"
                BuildableName = "WTNIOSockets"
                BlueprintName = "WTNIOSockets"
+               ReferencedContainer = "container:">
+            </BuildableReference>
+         </BuildActionEntry>
+         <BuildActionEntry
+            buildForTesting = "YES"
+            buildForRunning = "YES"
+            buildForProfiling = "YES"
+            buildForArchiving = "YES"
+            buildForAnalyzing = "YES">
+            <BuildableReference
+               BuildableIdentifier = "primary"
+               BlueprintIdentifier = "WhiteTippedListener"
+               BuildableName = "WhiteTippedListener"
+               BlueprintName = "WhiteTippedListener"
                ReferencedContainer = "container:">
             </BuildableReference>
          </BuildActionEntry>

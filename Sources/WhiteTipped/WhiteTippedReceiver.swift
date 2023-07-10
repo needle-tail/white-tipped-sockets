@@ -6,44 +6,47 @@
 //
 #if canImport(Network) && canImport(Combine) && canImport(SwiftUI)
 import Foundation
-import Network
+@preconcurrency import Network
 
 @available(macOS 10.15, iOS 13, tvOS 13, watchOS 6, *)
-public struct DisconnectResult {
+public struct DisconnectResult: Sendable {
     public var error: NWError?
-    public var code: NWProtocolWebSocket.CloseCode
+    public var code: NWProtocolWebSocket.CloseCode?
 }
 
 @available(macOS 10.15, iOS 13, tvOS 13, watchOS 6, *)
-open class WhiteTippedReciever: NSObject, ObservableObject, @unchecked Sendable {
-    @Published @objc dynamic open var textReceived = ""
-    @Published @objc dynamic open var binaryReceived = Data()
-    @Published @objc dynamic open var pongReceived = Data()
-    @Published @objc dynamic open var betterPathReceived = false
-    @Published @objc dynamic open var viablePathReceived = false
-    @Published @objc dynamic open var connectionStatus = false
-    @Published open var disconnectionPacketReceived: DisconnectResult?
-}
-
-public enum MessageType {
-    case text, binary, ping, pong, betterPath, viablePath, connectionStatus, disconnectPacket
+public final class WhiteTippedReciever: NSObject, ObservableObject, @unchecked Sendable {
+    @Published @objc dynamic public var textReceived = ""
+    @Published @objc dynamic public var binaryReceived = Data()
+    @Published @objc dynamic public var pongReceived = Data()
+    @Published @objc dynamic public var pingReceived = Data()
+    @Published @objc dynamic public var betterPathReceived = false
+    @Published @objc dynamic public var viablePathReceived = false
+    @Published @objc dynamic public var connectionStatus = false
+    @Published public var disconnectionPacketReceived: DisconnectResult?
 }
 
 @available(macOS 10.15, iOS 13, tvOS 13, watchOS 6, *)
-public struct MessagePacket {
-    public var text: String?
-    public var binary: Data?
-    public var ping: Data?
-    public var pong: Data?
-    public var betterPath: Bool?
-    public var viablePath: Bool?
-    public var connectionStatus: Bool?
-    public var disconnectPacket: DisconnectResult?
+public enum MessagePacket {
+    case text(String)
+    case binary(Data)
+    case ping(Data)
+    case pong(Data)
+    case betterPath(Bool)
+    case viablePath(Bool)
+    case connectionStatus(Bool)
+    case disconnectPacket(DisconnectResult)
 }
 
 @available(macOS 10.15, iOS 13, tvOS 13, watchOS 6, *)
-public protocol WhiteTippedRecieverProtocol: AnyObject {
-    
-    func received(_ type: MessageType, packet: MessagePacket)
+public protocol WhiteTippedRecieverDelegate: AnyObject, Sendable {
+    func received(message packet: MessagePacket) async throws
+    func received(_ packet: MessagePacket)
+}
+
+@available(macOS 10.15, iOS 13, tvOS 13, watchOS 6, *)
+public extension WhiteTippedRecieverDelegate {
+    func received(message packet: MessagePacket) async throws {}
+    func received(_ packet: MessagePacket) {}
 }
 #endif
