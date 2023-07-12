@@ -386,7 +386,7 @@ public final actor WhiteTippedConnection {
                 os_log("Connection failed with error - Error:", log: oslog, type: .info)
             }
             try await self.receiverDelegate?.received(message: .connectionStatus(false))
-            try await handleNetworkIssue(error: error, code: .protocolCode(.abnormalClosure))
+            try await handleNetworkIssue(error: error)
             Task { @MainActor [weak self] in
                 guard let self else { return }
                 self.receiver.connectionStatus = false
@@ -494,7 +494,7 @@ public final actor WhiteTippedConnection {
                 guard let oslog = oslog else { return }
                 os_log("Received close WebSocketFrame", log: oslog, type: .info)
             }
-            try await handleNetworkIssue(code: .protocolCode(.goingAway))
+            try await handleNetworkIssue(code: metadata.closeCode)
         case .ping:
             if #available(iOS 14, *) {
                 logger?.trace("Received ping WebSocketFrame")
@@ -545,16 +545,17 @@ public final actor WhiteTippedConnection {
             switch code {
             case .protocolCode(let protocolCode):
                 switch protocolCode {
-                case .normalClosure:
+                case .normalClosure, .protocolError:
                     //Close the connection and tell the client. A normal Closure occurs when the client expects to close the connection
-                    try await notifyCloseOrError(code)
+                    //A protocolError indicates that some issue occured during the call andwe can no longer send events due to a non responsice socket so we will clean and close the connection.
+                    try await notifyCloseOrError(with: error, code)
                     await cancelConnection()
                 default:
                     let metadata = NWProtocolWebSocket.Metadata(opcode: .close)
                     metadata.closeCode = code
-                    try await notifyCloseOrError(with: error, code)
                     let context = NWConnection.ContentContext(identifier: "close", metadata: [metadata])
                     try await send(data: Data(), context: context)
+                    try await notifyCloseOrError(with: error, code)
                     await cancelConnection()
                 }
             default:
