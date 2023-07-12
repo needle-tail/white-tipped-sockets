@@ -22,7 +22,6 @@ public final actor WhiteTippedConnection {
         let autoReplyPing: Bool
         let wtAutoReplyPing: Bool
         let queue: DispatchQueue
-        let lock = NSLock()
         
         public init(
             queue: String,
@@ -38,9 +37,7 @@ public final actor WhiteTippedConnection {
             autoReplyPing: Bool = false,
             wtAutoReplyPing: Bool = false
         ) {
-            lock.lock()
             self.queue = DispatchQueue(label: queue, attributes: .concurrent)
-            lock.unlock()
             self.headers = headers
             self.cookies = cookies
             self.urlRequest = urlRequest
@@ -192,16 +189,19 @@ public final actor WhiteTippedConnection {
                 guard let self else { return }
                 self.asyncClosureBridge { [weak self] in
                     guard let self else { return }
+                    guard await result != self.receiver.betterPathReceived && result == true else { return }
                     try await self.receiverDelegate?.received(message: .betterPath(result))
                 }
                 self.asyncClosureBridge { @MainActor [weak self] in
                     guard let self else { return }
+                    guard result != self.receiver.betterPathReceived && result == true else { return }
                     self.receiver.betterPathReceived = result
                 }
                 
                 if result {
                     self.asyncClosureBridge { [weak self] in
                         guard let self else { return }
+                        guard await result != self.receiver.betterPathReceived && result == true else { return }
                         try await self.monitorConnection()
                     }
                 }
@@ -233,19 +233,27 @@ public final actor WhiteTippedConnection {
         } else {
             viablePathCancellable = connectionState.$viablePath.sink { [weak self] result in
                 guard let self else { return }
+                self.asyncClosureBridge { @MainActor [weak self] in
+                    guard let self else { return }
+                    guard result != self.receiver.viablePathReceived else { return }
+                }
                 self.asyncClosureBridge { [weak self] in
                     guard let self else { return }
+                    guard await result != self.receiver.viablePathReceived else { return }
                     try await self.receiverDelegate?.received(message: .viablePath(result))
                 }
                 self.asyncClosureBridge { @MainActor [weak self] in
                     guard let self else { return }
+                    guard result != self.receiver.viablePathReceived else { return }
                     self.receiver.viablePathReceived = result
                 }
                 
                 if result {
                     self.asyncClosureBridge { [weak self] in
                         guard let self else { return }
-                        try await self.monitorConnection()
+                        if result && connectionState.currentState != .ready {
+                            try await self.monitorConnection()
+                        }
                     }
                 }
             }
@@ -433,53 +441,14 @@ public final actor WhiteTippedConnection {
             })
             try await channelRead(message: message)
         } catch let error as NWError {
-            try await reportErrorOrDisconnection(error)
+            try await handleNetworkIssue(error: error)
         } catch {
-            await cancelConnection()
+            //This means we did not receive a network error, but some other error was caught. Therefore we want to send the close message to the server
+            try await handleNetworkIssue(code: .protocolCode(.goingAway))
             throw error
         }
     }
-    
-    private func reportErrorOrDisconnection(_ error: NWError) async throws {
-        if shouldReportNWError(error) {
-            try await handleNetworkIssue(error: error)
-        }
-        if isDisconnectionNWError(error) {
-            try await handleNetworkIssue(error: error, code: .protocolCode(.goingAway))
-        }
-    }
 
-    
-    /// Determine if a Network error should be reported.
-    ///
-    /// POSIX errors of either `ENOTCONN` ("Socket is not connected") or
-    /// `ECANCELED` ("Operation canceled") should not be reported if the disconnection was intentional.
-    /// All other errors should be reported.
-    /// - Parameter error: The `NWError` to inspect.
-    /// - Returns: `true` if the error should be reported.
-    private func shouldReportNWError(_ error: NWError) -> Bool {
-        if case let .posix(code) = error,
-           code == .ENOTCONN || code == .ECANCELED {
-            return false
-        }
-    return true
-}
-
-    /// Determine if a Network error represents an unexpected disconnection event.
-    /// - Parameter error: The `NWError` to inspect.
-    /// - Returns: `true` if the error represents an unexpected disconnection event.
-    private func isDisconnectionNWError(_ error: NWError) -> Bool {
-        if case let .posix(code) = error,
-           code == .ETIMEDOUT
-            || code == .ENOTCONN
-            || code == .ECANCELED
-            || code == .ENETDOWN
-            || code == .ECONNABORTED {
-            return true
-        } else {
-            return false
-        }
-    }
         
     func channelRead(message: WhiteTippedMesssage) async throws {
         guard let metadata = message.context?.protocolMetadata.first as? NWProtocolWebSocket.Metadata else { return }
@@ -571,21 +540,30 @@ public final actor WhiteTippedConnection {
     
     public func handleNetworkIssue(error: NWError? = nil, code: NWProtocolWebSocket.CloseCode? = nil) async throws {
         canRun = false
-            //NORMAL
-        if code == .protocolCode(.normalClosure) {
-            try await notifyCloseOrError(code)
-            await cancelConnection()
-            //ONLY ERROR, DON'T CLOSE
-        } else if let error = error, code == nil {
-            try await notifyCloseOrError(with: error)
+            
+        if let code = code {
+            switch code {
+            case .protocolCode(let protocolCode):
+                switch protocolCode {
+                case .normalClosure:
+                    //Close the connection and tell the client. A normal Closure occurs when the client expects to close the connection
+                    try await notifyCloseOrError(code)
+                    await cancelConnection()
+                default:
+                    let metadata = NWProtocolWebSocket.Metadata(opcode: .close)
+                    metadata.closeCode = code
+                    try await notifyCloseOrError(with: error, code)
+                    let context = NWConnection.ContentContext(identifier: "close", metadata: [metadata])
+                    try await send(data: Data(), context: context)
+                    await cancelConnection()
+                }
+            default:
+                try await notifyCloseOrError(code)
+                await cancelConnection()
+            }
         } else {
-            //CLOSE
-            let metadata = NWProtocolWebSocket.Metadata(opcode: .close)
-            guard let code = code else { return }
-            metadata.closeCode = code
-            try await notifyCloseOrError(with: error, code)
-            let context = NWConnection.ContentContext(identifier: "close", metadata: [metadata])
-            try await send(data: Data(), context: context)
+            //No WebSocket Protocol Code, meaning we received some unexpected error from the server side
+            try await notifyCloseOrError(code)
             await cancelConnection()
         }
     }
