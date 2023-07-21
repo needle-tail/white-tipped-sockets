@@ -641,7 +641,7 @@ public final actor WhiteTippedConnection {
     
     func sendPing() async throws {
         let metadata = NWProtocolWebSocket.Metadata(opcode: .ping)
-        try await self.pongHandler(metadata)
+        try await self.pongHandler(metadata, queue: self.configuration.queue)
         let context = NWConnection.ContentContext(
             identifier: "ping",
             metadata: [metadata]
@@ -652,7 +652,6 @@ public final actor WhiteTippedConnection {
     
     func sendPong() async throws {
         let metadata = NWProtocolWebSocket.Metadata(opcode: .pong)
-        try await pongHandler(metadata)
         let context = NWConnection.ContentContext(
             identifier: "pong",
             metadata: [metadata]
@@ -661,19 +660,17 @@ public final actor WhiteTippedConnection {
         try await send(data: data, context: context)
     }
     
-    func pongHandler(_ metadata: NWProtocolWebSocket.Metadata) async throws {
-        Task {
-            try Task.checkCancellation()
-            try await withCheckedThrowingContinuation({ (continuation: CheckedContinuation<Void, Error>) in
-                metadata.setPongHandler(configuration.queue) { error in
-                    if let error = error {
-                        continuation.resume(throwing: error)
-                    } else {
-                        continuation.resume()
-                    }
+    func pongHandler(_ metadata: NWProtocolWebSocket.Metadata, queue: DispatchQueue) async throws {
+        try await withCheckedThrowingContinuation({ [weak self] (continuation: CheckedContinuation<Void, Error>) in
+            guard let self else { return }
+            metadata.setPongHandler(queue) { error in
+                if let error = error {
+                    continuation.resume(throwing: error)
+                } else {
+                    continuation.resume()
                 }
-            })
-        }
+            }
+        })
     }
     
     func send(data: Data, context: NWConnection.ContentContext) async throws {
