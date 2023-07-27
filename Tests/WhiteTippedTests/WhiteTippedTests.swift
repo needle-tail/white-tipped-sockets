@@ -18,8 +18,8 @@ final class WhiteTippedTests: XCTestCase, @unchecked Sendable, WhiteTippedReciev
     
     override func setUp() async throws {
         guard let url = URL(string: "ws://127.0.0.1:8080") else { return }
-        server = try await WhiteTippedListener(configuration: WhiteTippedListener.NetworkConfiguration(queue: "server"))
-        await server.listen()
+//        server = try await WhiteTippedListener(configuration: WhiteTippedListener.NetworkConfiguration(queue: "server"))
+//        await server.listen()
         
         socket = try WhiteTippedConnection(
             configuration: WhiteTippedConnection.NetworkConfiguration(
@@ -39,7 +39,7 @@ final class WhiteTippedTests: XCTestCase, @unchecked Sendable, WhiteTippedReciev
     
     override func tearDown() async throws {
         try await socket.handleNetworkIssue()
-        await server.listener.cancel()
+//        await server.listener.cancel()
         
     }
     
