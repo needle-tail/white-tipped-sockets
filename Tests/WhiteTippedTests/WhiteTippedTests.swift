@@ -38,7 +38,7 @@ final class WhiteTippedTests: XCTestCase, @unchecked Sendable, WhiteTippedReciev
     }
     
     override func tearDown() async throws {
-//        try await socket.disconnect()
+        try await socket.handleNetworkIssue()
 //        await server.listener.cancel()
         
     }
@@ -54,43 +54,43 @@ final class WhiteTippedTests: XCTestCase, @unchecked Sendable, WhiteTippedReciev
         })
     }
     
-//    let consumer = WhiteTippedAsyncConsumer<String>()
-//    
-//    func testMultipartMessage() async throws {
-//        try await withThrowingTaskGroup(of: Int.self, body: { group in
-//            try Task.checkCancellation()
-//
-//            let chunked = longMessage.async.chunks(ofCount: 700)
-//            let totalParts = await self.createTotalParts(longMessage)
-//
-//            for try await chunk in chunked {
-//                await consumer.feedConsumer([String(chunk)])
-//            }
-//
-//            for try await result in WhiteTippedAsyncSequence(consumer: self.consumer) {
-//                switch result {
-//                case .success(let message):
-//                    group.addTask {
-//                        return await self.consumer.deque.count + 1
-//                    }
-//                    let partId2 = try await group.next()
-//                    group.addTask {
-//                        //TODO: FIX SENDING OUT OF ORDER
-//                        guard let id = partId2 else { return 0 }
-//                        let multipartMessage = MultipartPacket(id: id, finalId: totalParts, message: message)
-//                        let endodedMessage = try JSONEncoder().encode(multipartMessage)
-//                        guard let encodedString = String(data: endodedMessage, encoding: .utf8) else { return 0 }
-//                        try await self.socket.sendText(encodedString)
-//                        return 0
-//                    }
-//                default:
-//                    return
-//                }
-//            }
-//            _ = try await group.next()
-//            group.cancelAll()
-//        })
-//    }
+    let consumer = WhiteTippedAsyncConsumer<String>()
+
+    func testMultipartMessage() async throws {
+        try await withThrowingTaskGroup(of: Int.self, body: { group in
+            try Task.checkCancellation()
+
+            let chunked = longMessage.async.chunks(ofCount: 700)
+            let totalParts = await self.createTotalParts(longMessage)
+
+            for try await chunk in chunked {
+                await consumer.feedConsumer([String(chunk)])
+            }
+
+            for try await result in WhiteTippedAsyncSequence(consumer: self.consumer) {
+                switch result {
+                case .success(let message):
+                    group.addTask {
+                        return await self.consumer.deque.count + 1
+                    }
+                    let partId2 = try await group.next()
+                    group.addTask {
+                        //TODO: FIX SENDING OUT OF ORDER
+                        guard let id = partId2 else { return 0 }
+                        let multipartMessage = MultipartPacket(id: id, finalId: totalParts, message: message)
+                        let endodedMessage = try JSONEncoder().encode(multipartMessage)
+                        guard let encodedString = String(data: endodedMessage, encoding: .utf8) else { return 0 }
+                        try await self.socket.sendText(encodedString)
+                        return 0
+                    }
+                default:
+                    return
+                }
+            }
+            _ = try await group.next()
+            group.cancelAll()
+        })
+    }
     
     func createTotalParts(_ message: String) async -> Int {
         return (message.count / 700) + 1
