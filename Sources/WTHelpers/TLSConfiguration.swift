@@ -1,6 +1,6 @@
 //
 //  WhiteTipped.swift
-//  
+//
 //
 //  Created by Cole M on 6/17/22.
 //
@@ -35,6 +35,7 @@ public class TLSConfiguration{
     
     @available(iOS 13, *)
     public static func trustSelfSigned(_
+                                trustAll: Bool,
                                 queue: DispatchQueue,
                                 certificates: [String]?
     ) throws -> NWParameters {
@@ -57,7 +58,10 @@ public class TLSConfiguration{
         sec_protocol_options_set_verify_block(
             options.securityProtocolOptions,
             { _, sec_trust, sec_protocol_verify_complete in
-                
+                guard !trustAll else {
+                    sec_protocol_verify_complete(true)
+                    return
+                }
                 let trust = sec_trust_copy_ref(sec_trust).takeRetainedValue()
                 if let trustRootCertificates = secTrustRoots {
                     SecTrustSetAnchorCertificates(trust, trustRootCertificates as CFArray)
@@ -81,7 +85,9 @@ public class TLSConfiguration{
                         sec_protocol_verify_complete(result)
                     }
 
-                }, queue)
+                },
+            queue
+        )
 
         
         /// We can set minimum TLS protocol

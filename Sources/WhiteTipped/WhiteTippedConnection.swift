@@ -22,6 +22,8 @@ public final actor WhiteTippedConnection {
         let autoReplyPing: Bool
         let wtAutoReplyPing: Bool
         let queue: DispatchQueue
+        let loggerCategory: String
+        let loggerSubSystem: String
         
         public init(
             queue: String,
@@ -35,7 +37,9 @@ public final actor WhiteTippedConnection {
             certificates: [String] = [],
             maximumMessageSize: Int = 1_000_000 * 16,
             autoReplyPing: Bool = false,
-            wtAutoReplyPing: Bool = false
+            wtAutoReplyPing: Bool = false,
+            loggerSubSystem: String = "WhiteTipped",
+            loggerCategory: String = "WhiteTippedConnection"
         ) {
             self.queue = DispatchQueue(label: queue, attributes: .concurrent)
             self.headers = headers
@@ -49,6 +53,8 @@ public final actor WhiteTippedConnection {
             self.maximumMessageSize = maximumMessageSize
             self.autoReplyPing = autoReplyPing
             self.wtAutoReplyPing = wtAutoReplyPing
+            self.loggerSubSystem = loggerSubSystem
+            self.loggerCategory = loggerCategory
         }
     }
     
@@ -90,7 +96,8 @@ public final actor WhiteTippedConnection {
         }
         
         let parameters: NWParameters = configuration.trustAll ? try TLSConfiguration.trustSelfSigned(
-            configuration.queue,
+            configuration.trustAll,
+            queue: configuration.queue,
             certificates: configuration.certificates) : (configuration.url.scheme == "ws" ? .tcp : .tls)
         parameters.defaultProtocolStack.applicationProtocols.insert(options, at: 0)
         connection = NWConnection(to: .url(configuration.url), using: parameters)
@@ -98,9 +105,9 @@ public final actor WhiteTippedConnection {
     
     func createLogger() async {
         if #available(iOS 14, *) {
-            self.logger = Logger(subsystem: "WhiteTipped", category: "WhiteTippedConnection")
+            self.logger = Logger(subsystem: configuration.loggerSubSystem, category: configuration.loggerCategory)
         } else {
-            self.oslog = OSLog(subsystem: "WhiteTipped", category: "WhiteTippedConnection")
+            self.oslog = OSLog(subsystem: configuration.loggerSubSystem, category: configuration.loggerCategory)
         }
     }
     
@@ -111,28 +118,48 @@ public final actor WhiteTippedConnection {
     public func connect() async {
         await self.createLogger()
         self.connection.start(queue: self.configuration.queue)
-        self.pathHandlers()
         do {
-            try await withThrowingTaskGroup(of: Void.self, body: { group in
-                try Task.checkCancellation()
-                group.addTask { [weak self] in
-                    guard let self else { return }
-                    try await self.betterPath()
-                }
-                group.addTask { [weak self] in
-                    guard let self else { return }
-                    try await self.viablePath()
-                }
-                group.addTask { [weak self] in
-                    guard let self else { return }
-                    try await self.monitorConnection()
-                }
-                _ = try await group.next()
-                group.cancelAll()
-            })
+            if #available(iOS 15, *) {
+                self.pathHandlers()
+                try await withThrowingTaskGroup(of: Void.self, body: { group in
+                    try Task.checkCancellation()
+                    group.addTask { [weak self] in
+                        guard let self else { return }
+                        try await self.betterPath(self.connectionState)
+                    }
+                    group.addTask { [weak self] in
+                        guard let self else { return }
+                        try await self.viablePath(self.connectionState)
+                    }
+                    group.addTask { [weak self] in
+                        guard let self else { return }
+                        try await self.monitorConnection(self.connectionState)
+                    }
+                    _ = try await group.next()
+                    group.cancelAll()
+                })
+            } else {
+                try await withThrowingTaskGroup(of: Void.self, body: { group in
+                    try Task.checkCancellation()
+                    group.addTask { [weak self] in
+                        guard let self = self else { return }
+                        try await self.setupViability(self.connection)
+                    }
+                    group.addTask { [weak self] in
+                        guard let self = self else { return }
+                        try await self.setupConnectionState(self.connection)
+                    }
+                    group.addTask { [weak self] in
+                        guard let self = self else { return }
+                        try await self.setupBetterPath(self.connection)
+                    }
+                    _ = try await group.next()
+                    group.cancelAll()
+                })
+            }
         } catch {
             if #available(iOS 14, *) {
-                self.logger?.error("\(error)")
+                self.logger?.error("\(error.localizedDescription)")
             } else {
                 guard let oslog = self.oslog else { return }
                 os_log("@%", log: oslog, type: .error, error.localizedDescription)
@@ -140,12 +167,163 @@ public final actor WhiteTippedConnection {
         }
     }
     
-    private func pathHandlers() {
-        if #available(iOS 15.0, *) {
-            self.stateCancellable = self.connectionState.publisher(for: \.currentState) as? Cancellable
-            self.betterPathCancellable = self.connectionState.publisher(for: \.betterPath) as? Cancellable
-            self.viablePathCancellable = self.connectionState.publisher(for: \.viablePath) as? Cancellable
+    private func setupViability(_ connection: NWConnection) async throws {
+        try await withThrowingTaskGroup(of: AsyncStream<Bool>?.self, body: { group in
+            try Task.checkCancellation()
+            group.addTask { [weak self] in
+                guard let self = self else { return nil }
+                return try await self.viabilityStream(connection)
+            }
+            guard let next = try await group.next() else { return }
+            group.addTask { [weak self] in
+                guard let self = self else { return nil }
+                guard let stream = next else { return nil }
+                try await self.viablePath(stream, connection: connection)
+                return stream
+            }
+            _ = try await group.next()
+            group.cancelAll()
+        })
+    }
+    
+    private func setupConnectionState(_ connection: NWConnection) async throws {
+        try await withThrowingTaskGroup(of: AsyncStream<NWConnection.State>?.self, body: { group in
+            try Task.checkCancellation()
+            group.addTask { [weak self] in
+                guard let self = self else { return nil }
+                return try await self.stateStream(connection)
+            }
+            guard let next = try await group.next() else { return }
+            group.addTask { [weak self] in
+                guard let self = self else { return nil }
+                guard let stream = next else { return nil }
+                try await self.connectionState(stream)
+                return stream
+            }
+            _ = try await group.next()
+            group.cancelAll()
+        })
+    }
+    
+    private func setupBetterPath(_ connection: NWConnection) async throws {
+        try await withThrowingTaskGroup(of: AsyncStream<Bool>?.self, body: { group in
+            try Task.checkCancellation()
+            group.addTask { [weak self] in
+                guard let self = self else { return nil }
+                return try await self.betterPathStream(connection)
+            }
+            guard let next = try await group.next() else { return }
+            group.addTask { [weak self] in
+                guard let self = self else { return nil }
+                guard let stream = next else { return nil }
+                try await self.betterPath(stream, connection: connection)
+                return nil
+            }
+            _ = try await group.next()
+            group.cancelAll()
+        })
+    }
+    
+    //MARK: iOS 13,14 Handlers
+    private func viabilityStream(_ connection: NWConnection) async throws -> AsyncStream<Bool>  {
+        return AsyncStream { continuation in
+            connection.viabilityUpdateHandler = { value in
+                continuation.yield(value)
+            }
         }
+    }
+    
+    private func stateStream(_ connection: NWConnection) async throws -> AsyncStream<NWConnection.State> {
+        return AsyncStream { continuation in
+            connection.stateUpdateHandler = { state in
+                continuation.yield(state)
+            }
+        }
+    }
+    
+    private func betterPathStream(_ connection: NWConnection) async throws -> AsyncStream<Bool> {
+        return AsyncStream { continuation in
+            connection.betterPathUpdateHandler = { path in
+                continuation.yield(path)
+            }
+        }
+    }
+    
+    
+    private func betterPath(_ stream: AsyncStream<Bool>, connection: NWConnection) async throws {
+        for try await value in stream {
+            guard await value != self.receiver.betterPathReceived && value else { return }
+            try await self.receiverDelegate?.received(message: .betterPath(value))
+            
+            await MainActor.run { [weak self] in
+                guard let self = self else { return }
+                self.receiver.betterPathReceived = value
+            }
+            
+            if value {
+                try await withThrowingTaskGroup(of: Void.self, body: { group in
+                    try Task.checkCancellation()
+                    group.addTask { [weak self] in
+                        guard let self else { return }
+                        try await self.setupConnectionState(connection)
+                    }
+                    _ = try await group.next()
+                    group.cancelAll()
+                })
+            }
+        }
+    }
+    
+    private func viablePath(_ stream: AsyncStream<Bool>, connection: NWConnection) async throws {
+        for try await value in stream {
+            guard await value != self.receiver.viablePathReceived else { return }
+            await MainActor.run { [weak self] in
+                guard let self = self else { return }
+                self.receiver.viablePathReceived = value
+            }
+            
+            try await self.receiverDelegate?.received(message: .viablePath(value))
+            
+            await MainActor.run { [weak self] in
+                guard let self = self else { return }
+                self.receiver.viablePathReceived = value
+            }
+            
+            if value && self.connectionState.currentState != .ready {
+                try await withThrowingTaskGroup(of: Void.self, body: { group in
+                    try Task.checkCancellation()
+                    group.addTask { [weak self] in
+                        guard let self else { return }
+                        try await self.setupConnectionState(connection)
+                    }
+                    _ = try await group.next()
+                    group.cancelAll()
+                })
+            }
+        }
+    }
+    
+    
+    private func connectionState(_ stream: AsyncStream<NWConnection.State>) async throws {
+        for try await state in stream {
+            try await self.monitorConnectionLogic(
+                state,
+                betterPath: self.receiver.betterPathReceived,
+                viablePath: self.receiver.viablePathReceived
+            )
+        }
+    }
+    
+    @objc private func connectionTimeout() async {
+        
+    }
+    
+    //MARK: iOS 15 and up Handlers
+    @available(iOS 15, *)
+    private func pathHandlers() {
+        self.stateCancellable = self.connectionState.publisher(for: \.currentState) as? Cancellable
+        self.betterPathCancellable = self.connectionState.publisher(for: \.betterPath) as? Cancellable
+        self.viablePathCancellable = self.connectionState.publisher(for: \.viablePath) as? Cancellable
         
         connection.stateUpdateHandler = { [weak self] state in
             guard let self else { return }
@@ -163,133 +341,63 @@ public final actor WhiteTippedConnection {
         }
     }
     
-    private func betterPath() async throws {
-        if #available(iOS 15.0, *) {
-            for await result in self.connectionState.$betterPath.values {
-                try await self.receiverDelegate?.received(message: .betterPath(result))
-                await MainActor.run { [weak self] in
-                    guard let self else { return }
-                    self.receiver.betterPathReceived = result
-                }
-                if result {
-                    try await withThrowingTaskGroup(of: Void.self, body: { group in
-                        try Task.checkCancellation()
-                        group.addTask { [weak self] in
-                            guard let self else { return }
-                            try await self.monitorConnection()
-                        }
-                        _ = try await group.next()
-                        group.cancelAll()
-                    })
-                }
-            }
-        } else {
-            self.betterPathCancellable = self.connectionState.$betterPath.sink { [weak self] result in
+    @available(iOS 15, *)
+    private func betterPath(_ connectionState: ObservableNWConnectionState) async throws {
+        for await result in connectionState.$betterPath.values {
+            try await self.receiverDelegate?.received(message: .betterPath(result))
+            await MainActor.run { [weak self] in
                 guard let self else { return }
-                self.asyncClosureBridge { [weak self] in
-                    guard let self else { return }
-                    guard await result != self.receiver.betterPathReceived && result == true else { return }
-                    try await self.receiverDelegate?.received(message: .betterPath(result))
-                }
-                self.asyncClosureBridge { @MainActor [weak self] in
-                    guard let self else { return }
-                    guard result != self.receiver.betterPathReceived && result == true else { return }
-                    self.receiver.betterPathReceived = result
-                }
-                
-                if result {
-                    self.asyncClosureBridge { [weak self] in
+                self.receiver.betterPathReceived = result
+            }
+            if result {
+                try await withThrowingTaskGroup(of: Void.self, body: { group in
+                    try Task.checkCancellation()
+                    group.addTask { [weak self] in
                         guard let self else { return }
-                        guard await result != self.receiver.betterPathReceived && result == true else { return }
-                        try await self.monitorConnection()
+                        try await self.monitorConnection(connectionState)
                     }
-                }
+                    _ = try await group.next()
+                    group.cancelAll()
+                })
             }
         }
     }
     
-    private func viablePath() async throws {
-        if #available(iOS 15.0, *) {
-            for await result in self.connectionState.$viablePath.values {
-                try await self.receiverDelegate?.received(message: .viablePath(result))
-                await MainActor.run { [weak self] in
-                    guard let self else { return }
-                    self.receiver.viablePathReceived = result
-                }
-                
-                if result && self.connectionState.currentState != .ready {
-                    try await withThrowingTaskGroup(of: Void.self, body: { group in
-                        try Task.checkCancellation()
-                        group.addTask { [weak self] in
-                            guard let self else { return }
-                            try await self.monitorConnection()
-                        }
-                        _ = try await group.next()
-                        group.cancelAll()
-                    })
-                }
-            }
-        } else {
-            self.viablePathCancellable = self.connectionState.$viablePath.sink { [weak self] result in
+    @available(iOS 15, *)
+    private func viablePath(_ connectionState: ObservableNWConnectionState) async throws {
+        for await result in connectionState.$viablePath.values {
+            try await self.receiverDelegate?.received(message: .viablePath(result))
+            await MainActor.run { [weak self] in
                 guard let self else { return }
-                self.asyncClosureBridge { @MainActor [weak self] in
-                    guard let self else { return }
-                    guard result != self.receiver.viablePathReceived else { return }
-                }
-                self.asyncClosureBridge { [weak self] in
-                    guard let self else { return }
-                    guard await result != self.receiver.viablePathReceived else { return }
-                    try await self.receiverDelegate?.received(message: .viablePath(result))
-                }
-                self.asyncClosureBridge { @MainActor [weak self] in
-                    guard let self else { return }
-                    guard result != self.receiver.viablePathReceived else { return }
-                    self.receiver.viablePathReceived = result
-                }
-                
-                if result {
-                    self.asyncClosureBridge { [weak self] in
+                self.receiver.viablePathReceived = result
+            }
+            
+            if result && connectionState.currentState != .ready {
+                try await withThrowingTaskGroup(of: Void.self, body: { group in
+                    try Task.checkCancellation()
+                    group.addTask { [weak self] in
                         guard let self else { return }
-                        if result && self.connectionState.currentState != .ready {
-                            try await self.monitorConnection()
-                        }
+                        try await self.monitorConnection(connectionState)
                     }
-                }
+                    _ = try await group.next()
+                    group.cancelAll()
+                })
             }
         }
     }
     
-    nonisolated private func asyncClosureBridge(completion: @escaping () async throws  -> Void) {
-        Task {
-            try Task.checkCancellation()
-            try await completion()
+    @available(iOS 15, *)
+    private func monitorConnection(_ connectionState: ObservableNWConnectionState) async throws {
+        for await state in connectionState.$currentState.values {
+            try await self.monitorConnectionLogic(
+                state,
+                betterPath: self.receiver.betterPathReceived,
+                viablePath: self.receiver.viablePathReceived
+            )
         }
     }
     
-    private func monitorConnection() async throws {
-        if #available(iOS 15.0, *) {
-            for await state in self.connectionState.$currentState.values {
-                try await self.monitorConnectionLogic(
-                    state,
-                    betterPath: self.receiver.betterPathReceived,
-                    viablePath: self.receiver.viablePathReceived
-                )
-            }
-        } else {
-            self.currentStateCancellable = self.connectionState.$currentState.sink { [weak self] state in
-                guard let self else { return }
-                self.asyncClosureBridge { [weak self] in
-                    guard let self else { return }
-                    try await self.monitorConnectionLogic(
-                        state,
-                        betterPath: self.receiver.betterPathReceived,
-                        viablePath: self.receiver.viablePathReceived
-                    )
-                }
-            }
-        }
-    }
-    
+    //MARK: Connection Logic
     private func monitorConnectionLogic(_
                                         state: NWConnection.State,
                                         betterPath: Bool,
@@ -328,13 +436,18 @@ public final actor WhiteTippedConnection {
                     self.connection.stateUpdateHandler?(.failed(.posix(.ETIMEDOUT)))
                 }
             } else {
-                DispatchQueue.global().asyncAfter(deadline: .now() + .seconds(self.configuration.connectionTimeout)) { [weak self] in
-                    guard let self else { return }
-                    self.asyncClosureBridge { [weak self] in
-                        guard let self else { return }
-                        if await self.connection.state != .ready {
-                            await self.connection.stateUpdateHandler?(.failed(.posix(.ETIMEDOUT)))
+                //I don't like this but it works for now
+                Task {
+                    try await withThrowingTaskGroup(of: Void.self) { group in
+                        try Task.checkCancellation()
+                        group.addTask {
+                            try await Task.sleep(nanoseconds: NSEC_PER_SEC * UInt64(self.configuration.connectionTimeout))
+                            if await self.connection.state != .ready {
+                                await self.connection.stateUpdateHandler?(.failed(.posix(.ETIMEDOUT)))
+                            }
                         }
+                        _ = try await group.next()
+                        group.cancelAll()
                     }
                 }
             }
@@ -355,12 +468,14 @@ public final actor WhiteTippedConnection {
                 }
                 self.canRun = false
                 let parameters: NWParameters = self.configuration.trustAll ? try TLSConfiguration.trustSelfSigned(
-                    configuration.queue,
+                    configuration.trustAll,
+                    queue: configuration.queue,
                     certificates: self.configuration.certificates) : (self.configuration.url.scheme == "ws" ? .tcp : .tls)
                 let newConnection = NWConnection(to: .url(self.configuration.url), using: parameters)
                 newConnection.start(queue: self.configuration.queue)
                 await setNewConnection(newConnection)
-                self.pathHandlers()
+                //We have a new connection that we need to monitor
+                await self.connect()
             }
             self.canRun = true
             try await self.receiverDelegate?.received(message: .connectionStatus(true))
@@ -379,7 +494,7 @@ public final actor WhiteTippedConnection {
             }
         case .failed(let error):
             if #available(iOS 14, *) {
-                self.logger?.error("Connection failed with error - Error: \(error)")
+                self.logger?.error("Connection failed with error - Error: \(error.localizedDescription)")
             } else {
                 guard let oslog = self.oslog else { return }
                 os_log("Connection failed with error - Error:", log: oslog, type: .info)
@@ -416,6 +531,7 @@ public final actor WhiteTippedConnection {
         self.connection = newConnection
     }
     
+    //MARK: Inbound
     private func asyncReceiverLoop(connection: NWConnection) async throws {
         while self.canRun {
             try await self.receiveMessage(connection: connection)
@@ -447,8 +563,8 @@ public final actor WhiteTippedConnection {
             throw error
         }
     }
-
-        
+    
+    
     func channelRead(message: WhiteTippedMesssage) async throws {
         guard let metadata = message.context?.protocolMetadata.first as? NWProtocolWebSocket.Metadata else { return }
         switch metadata.opcode {
@@ -525,7 +641,7 @@ public final actor WhiteTippedConnection {
                     try await self.ping(autoLoop: self.configuration.wtAutoReplyPing)
                 } catch {
                     if #available(iOS 14, *) {
-                        self.logger?.error("\(error)")
+                        self.logger?.error("\(error.localizedDescription)")
                     } else {
                         guard let oslog = self.oslog else { return }
                         os_log("%@", log: oslog, type: .error, error.localizedDescription)
@@ -537,54 +653,7 @@ public final actor WhiteTippedConnection {
         }
     }
     
-    public func handleNetworkIssue(error: NWError? = nil, code: NWProtocolWebSocket.CloseCode? = nil) async throws {
-        self.canRun = false
-            
-        if let code = code {
-            switch code {
-            case .protocolCode(let protocolCode):
-                switch protocolCode {
-                case .normalClosure, .protocolError:
-                    //Close the connection and tell the client. A normal Closure occurs when the client expects to close the connection
-                    //A protocolError indicates that some issue occured during the call andwe can no longer send events due to a non responsice socket so we will clean and close the connection.
-                    try await self.notifyCloseOrError(with: error, code)
-                    await self.cancelConnection()
-                default:
-                    let metadata = NWProtocolWebSocket.Metadata(opcode: .close)
-                    metadata.closeCode = code
-                    let context = NWConnection.ContentContext(identifier: "close", metadata: [metadata])
-                    try await self.send(data: Data(), context: context)
-                    try await self.notifyCloseOrError(with: error, code)
-                    await self.cancelConnection()
-                }
-            default:
-                try await self.notifyCloseOrError(code)
-                await self.cancelConnection()
-            }
-        } else {
-            //No WebSocket Protocol Code, meaning we received some unexpected error from the server side
-            try await self.notifyCloseOrError(code)
-            await self.cancelConnection()
-        }
-    }
-    
-    private func cancelConnection() async {
-        self.connection.cancel()
-        self.stateCancellable = nil
-        self.betterPathCancellable = nil
-        self.viablePathCancellable = nil
-    }
-    
-    func notifyCloseOrError(with error: NWError? = nil, _ reason: NWProtocolWebSocket.CloseCode? = nil) async throws {
-        let result = DisconnectResult(error: error, code: reason)
-        try await self.receiverDelegate?.received(message: .disconnectPacket(result))
-        await MainActor.run { [weak self] in
-            guard let self else { return }
-            self.receiver.disconnectionPacketReceived = result
-        }
-    }
-    
-    
+    //MARK: Outbound
     public func sendText(_ text: String) async throws {
         guard let data = text.data(using: .utf8) else { return }
         let metadata = NWProtocolWebSocket.Metadata(opcode: .text)
@@ -683,7 +752,11 @@ public final actor WhiteTippedConnection {
         })
     }
     
-    func sendAsync(data: Data, context: NWConnection.ContentContext, connection: NWConnection) async throws -> Void {
+    func sendAsync(
+        data: Data,
+        context: NWConnection.ContentContext,
+        connection: NWConnection
+    ) async throws -> Void {
         return try await withCheckedThrowingContinuation({ (continuation: CheckedContinuation<Void, Error>) in
             connection.send(
                 content: data,
@@ -712,6 +785,54 @@ public final actor WhiteTippedConnection {
             }
             _ = try await group.next()
             group.cancelAll()
+        }
+    }
+    
+    //MARK: Error Handling
+    public func handleNetworkIssue(error: NWError? = nil, code: NWProtocolWebSocket.CloseCode? = nil) async throws {
+        self.canRun = false
+        
+        if let code = code {
+            switch code {
+            case .protocolCode(let protocolCode):
+                switch protocolCode {
+                case .normalClosure, .protocolError:
+                    //Close the connection and tell the client. A normal Closure occurs when the client expects to close the connection
+                    //A protocolError indicates that some issue occured during the call andwe can no longer send events due to a non responsice socket so we will clean and close the connection.
+                    try await self.notifyCloseOrError(with: error, code)
+                    await self.cancelConnection()
+                default:
+                    let metadata = NWProtocolWebSocket.Metadata(opcode: .close)
+                    metadata.closeCode = code
+                    let context = NWConnection.ContentContext(identifier: "close", metadata: [metadata])
+                    try await self.send(data: Data(), context: context)
+                    try await self.notifyCloseOrError(with: error, code)
+                    await self.cancelConnection()
+                }
+            default:
+                try await self.notifyCloseOrError(code)
+                await self.cancelConnection()
+            }
+        } else {
+            //No WebSocket Protocol Code, meaning we received some unexpected error from the server side
+            try await self.notifyCloseOrError(code)
+            await self.cancelConnection()
+        }
+    }
+    
+    private func cancelConnection() async {
+        self.connection.cancel()
+        self.stateCancellable = nil
+        self.betterPathCancellable = nil
+        self.viablePathCancellable = nil
+    }
+    
+    func notifyCloseOrError(with error: NWError? = nil, _ reason: NWProtocolWebSocket.CloseCode? = nil) async throws {
+        let result = DisconnectResult(error: error, code: reason)
+        try await self.receiverDelegate?.received(message: .disconnectPacket(result))
+        await MainActor.run { [weak self] in
+            guard let self else { return }
+            self.receiver.disconnectionPacketReceived = result
         }
     }
 }
@@ -769,13 +890,13 @@ final class WTOSLogCache: @unchecked Sendable {
 }
 
 internal protocol CacheKey {
-   associatedtype Value
+    associatedtype Value
 }
 
 @available(iOS 14.0, *)
 internal final class LoggerKey: CacheKey {
     typealias Value = Logger
-
+    
     var logger: WhiteTippedConnection
     init(_ logger: WhiteTippedConnection) {
         self.logger = logger
@@ -785,7 +906,7 @@ internal final class LoggerKey: CacheKey {
 @available(iOS 13, macOS 12, *)
 internal final class OSLogKey: CacheKey {
     typealias Value = OSLog
-
+    
     var logger: WhiteTippedConnection
     init(_ logger: WhiteTippedConnection) {
         self.logger = logger
