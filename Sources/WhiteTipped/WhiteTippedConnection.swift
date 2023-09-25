@@ -94,7 +94,7 @@ public final actor WhiteTippedConnection {
         if !configuration.headers.isEmpty {
             options.setAdditionalHeaders(configuration.headers.map { ($0.key, $0.value) } )
         }
-        
+       
         let parameters: NWParameters = configuration.trustAll ? try TLSConfiguration.trustSelfSigned(
             configuration.trustAll,
             queue: configuration.queue,
@@ -104,7 +104,7 @@ public final actor WhiteTippedConnection {
     }
     
     func createLogger() async {
-        if #available(iOS 14, *) {
+        if #available(iOS 14, macOS 11.0, *) {
             self.logger = Logger(subsystem: configuration.loggerSubSystem, category: configuration.loggerCategory)
         } else {
             self.oslog = OSLog(subsystem: configuration.loggerSubSystem, category: configuration.loggerCategory)
@@ -118,22 +118,23 @@ public final actor WhiteTippedConnection {
     public func connect() async {
         await self.createLogger()
         self.connection.start(queue: self.configuration.queue)
+       
         do {
-            if #available(iOS 15, *) {
+            if #available(iOS 15, macOS 13.0, *) {
                 self.pathHandlers()
                 try await withThrowingTaskGroup(of: Void.self, body: { group in
                     try Task.checkCancellation()
                     group.addTask { [weak self] in
                         guard let self else { return }
-                        try await self.betterPath(self.connectionState)
+                        try await self.betterPath()
                     }
                     group.addTask { [weak self] in
                         guard let self else { return }
-                        try await self.viablePath(self.connectionState)
+                        try await self.viablePath()
                     }
                     group.addTask { [weak self] in
                         guard let self else { return }
-                        try await self.monitorConnection(self.connectionState)
+                        try await self.monitorConnection()
                     }
                     _ = try await group.next()
                     group.cancelAll()
@@ -158,7 +159,7 @@ public final actor WhiteTippedConnection {
                 })
             }
         } catch {
-            if #available(iOS 14, *) {
+            if #available(iOS 14, macOS 11.0, *) {
                 self.logger?.error("\(error.localizedDescription)")
             } else {
                 guard let oslog = self.oslog else { return }
@@ -319,7 +320,7 @@ public final actor WhiteTippedConnection {
     }
     
     //MARK: iOS 15 and up Handlers
-    @available(iOS 15, *)
+    @available(iOS 15, macOS 13.0, *)
     private func pathHandlers() {
         self.stateCancellable = self.connectionState.publisher(for: \.currentState) as? Cancellable
         self.betterPathCancellable = self.connectionState.publisher(for: \.betterPath) as? Cancellable
@@ -341,35 +342,13 @@ public final actor WhiteTippedConnection {
         }
     }
     
-    @available(iOS 15, *)
-    private func betterPath(_ connectionState: ObservableNWConnectionState) async throws {
-        for await result in connectionState.$betterPath.values {
+    @available(iOS 15, macOS 13.0, *)
+    private func betterPath() async throws {
+        for await result in self.connectionState.$betterPath.values {
             try await self.receiverDelegate?.received(message: .betterPath(result))
             await MainActor.run { [weak self] in
                 guard let self else { return }
                 self.receiver.betterPathReceived = result
-            }
-            if result {
-                try await withThrowingTaskGroup(of: Void.self, body: { group in
-                    try Task.checkCancellation()
-                    group.addTask { [weak self] in
-                        guard let self else { return }
-                        try await self.monitorConnection(connectionState)
-                    }
-                    _ = try await group.next()
-                    group.cancelAll()
-                })
-            }
-        }
-    }
-    
-    @available(iOS 15, *)
-    private func viablePath(_ connectionState: ObservableNWConnectionState) async throws {
-        for await result in connectionState.$viablePath.values {
-            try await self.receiverDelegate?.received(message: .viablePath(result))
-            await MainActor.run { [weak self] in
-                guard let self else { return }
-                self.receiver.viablePathReceived = result
             }
             
             if result && connectionState.currentState != .ready {
@@ -377,7 +356,31 @@ public final actor WhiteTippedConnection {
                     try Task.checkCancellation()
                     group.addTask { [weak self] in
                         guard let self else { return }
-                        try await self.monitorConnection(connectionState)
+                        try await self.monitorConnection()
+                    }
+                    _ = try await group.next()
+                    group.cancelAll()
+                })
+            }
+        }
+    }
+
+    @available(iOS 15, macOS 13.0, *)
+    private func viablePath() async throws {
+        for await result in self.connectionState.$viablePath.values {
+            try await self.receiverDelegate?.received(message: .viablePath(result))
+            await MainActor.run { [weak self] in
+                guard let self else { return }
+                self.receiver.viablePathReceived = result
+            }
+
+            
+            if result && connectionState.currentState != .ready {
+                try await withThrowingTaskGroup(of: Void.self, body: { group in
+                    try Task.checkCancellation()
+                    group.addTask { [weak self] in
+                        guard let self else { return }
+                        try await self.monitorConnection()
                     }
                     _ = try await group.next()
                     group.cancelAll()
@@ -386,9 +389,9 @@ public final actor WhiteTippedConnection {
         }
     }
     
-    @available(iOS 15, *)
-    private func monitorConnection(_ connectionState: ObservableNWConnectionState) async throws {
-        for await state in connectionState.$currentState.values {
+    @available(iOS 15, macOS 13.0, *)
+    private func monitorConnection() async throws {
+        for await state in self.connectionState.$currentState.values {
             try await self.monitorConnectionLogic(
                 state,
                 betterPath: self.receiver.betterPathReceived,
@@ -405,21 +408,22 @@ public final actor WhiteTippedConnection {
     ) async throws {
         switch state {
         case .setup:
-            if #available(iOS 14, *) {
+            if #available(iOS 14, macOS 11.0, *) {
                 self.logger?.info("Connection setup")
             } else {
                 guard let oslog = self.oslog else { return }
                 os_log("Connection setup", log: oslog, type: .info)
             }
-        case .waiting(let status):
-            if #available(iOS 14, *) {
-                self.logger?.info("Connection waiting with status - Status: \(status.localizedDescription)")
+        case .waiting(let error):
+            if #available(iOS 14, macOS 11.0, *) {
+                self.logger?.error("Connection waiting with status - Status: \(error.localizedDescription)")
             } else {
                 guard let oslog = self.oslog else { return }
-                os_log("Connection waiting with status - Status:", log: oslog, type: .info)
+                os_log("Connection waiting with status - Status: %@", log: oslog, type: .error, error.localizedDescription)
             }
+            self.connection.restart()
         case .preparing:
-            if #available(iOS 14, *) {
+            if #available(iOS 14, macOS 11.0, *) {
                 self.logger?.info("Connection preparing")
             } else {
                 guard let oslog = self.oslog else { return }
@@ -452,7 +456,7 @@ public final actor WhiteTippedConnection {
                 }
             }
         case .ready:
-            if #available(iOS 14, *) {
+            if #available(iOS 14, macOS 11.0, *) {
                 self.logger?.info("Connection established")
             } else {
                 guard let oslog = self.oslog else { return }
@@ -460,7 +464,7 @@ public final actor WhiteTippedConnection {
             }
             if betterPath || viablePath && self.canRun {
                 let pathMessage = betterPath ? "We found a better path" : "We found a viable path"
-                if #available(iOS 14, *) {
+                if #available(iOS 14, macOS 11.0, *) {
                     self.logger?.trace("\(pathMessage)")
                 } else {
                     guard let oslog = self.oslog else { return }
@@ -483,21 +487,21 @@ public final actor WhiteTippedConnection {
                 guard let self else { return }
                 self.receiver.connectionStatus = true
             }
-            try await withThrowingTaskGroup(of: Void.self) { group in
-                try Task.checkCancellation()
-                group.addTask { [weak self] in
-                    guard let self else { return }
-                    try await self.asyncReceiverLoop(connection: self.connection)
+                try await withThrowingTaskGroup(of: Void.self) { group in
+                    try Task.checkCancellation()
+                    group.addTask { [weak self] in
+                        guard let self else { return }
+                        try await self.asyncReceiverLoop(connection: self.connection)
+                    }
+                    _ = try await group.next()
+                    group.cancelAll()
                 }
-                _ = try await group.next()
-                group.cancelAll()
-            }
         case .failed(let error):
-            if #available(iOS 14, *) {
+            if #available(iOS 14, macOS 11.0, *) {
                 self.logger?.error("Connection failed with error - Error: \(error.localizedDescription)")
             } else {
                 guard let oslog = self.oslog else { return }
-                os_log("Connection failed with error - Error:", log: oslog, type: .info)
+                os_log("Connection failed with error - Error: %@", log: oslog, type: .error, error.localizedDescription)
             }
             try await self.receiverDelegate?.received(message: .connectionStatus(false))
             try await self.handleNetworkIssue(error: error)
@@ -506,7 +510,7 @@ public final actor WhiteTippedConnection {
                 self.receiver.connectionStatus = false
             }
         case .cancelled:
-            if #available(iOS 14, *) {
+            if #available(iOS 14, macOS 11.0, *) {
                 self.logger?.info("Connection cancelled")
             } else {
                 guard let oslog = self.oslog else { return }
@@ -518,7 +522,7 @@ public final actor WhiteTippedConnection {
                 self.receiver.connectionStatus = false
             }
         default:
-            if #available(iOS 14, *) {
+            if #available(iOS 14, macOS 11.0, *) {
                 self.logger?.info("Connection default")
             } else {
                 guard let oslog = self.oslog else { return }
@@ -534,7 +538,7 @@ public final actor WhiteTippedConnection {
     //MARK: Inbound
     private func asyncReceiverLoop(connection: NWConnection) async throws {
         while self.canRun {
-            try await self.receiveMessage(connection: connection)
+           try await self.receiveMessage(connection: self.connection)
         }
     }
     
@@ -569,14 +573,14 @@ public final actor WhiteTippedConnection {
         guard let metadata = message.context?.protocolMetadata.first as? NWProtocolWebSocket.Metadata else { return }
         switch metadata.opcode {
         case .cont:
-            if #available(iOS 14, *) {
+            if #available(iOS 14, macOS 11.0, *) {
                 self.logger?.trace("Received continuous WebSocketFrame")
             } else {
                 guard let oslog = self.oslog else { return }
                 os_log("Received continuous WebSocketFrame", log: oslog, type: .info)
             }
         case .text:
-            if #available(iOS 14, *) {
+            if #available(iOS 14, macOS 11.0, *) {
                 self.logger?.trace("Received text WebSocketFrame")
             } else {
                 guard let oslog = self.oslog else { return }
@@ -590,7 +594,7 @@ public final actor WhiteTippedConnection {
                 self.receiver.textReceived = text
             }
         case .binary:
-            if #available(iOS 14, *) {
+            if #available(iOS 14, macOS 11.0, *) {
                 self.logger?.trace("Received binary WebSocketFrame")
             } else {
                 guard let oslog = self.oslog else { return }
@@ -603,7 +607,7 @@ public final actor WhiteTippedConnection {
                 self.receiver.binaryReceived = data
             }
         case .close:
-            if #available(iOS 14, *) {
+            if #available(iOS 14, macOS 11.0, *) {
                 self.logger?.trace("Received close WebSocketFrame")
             } else {
                 guard let oslog = self.oslog else { return }
@@ -611,7 +615,7 @@ public final actor WhiteTippedConnection {
             }
             try await handleNetworkIssue(code: metadata.closeCode)
         case .ping:
-            if #available(iOS 14, *) {
+            if #available(iOS 14, macOS 11.0, *) {
                 self.logger?.trace("Received ping WebSocketFrame")
             } else {
                 guard let oslog = self.oslog else { return }
@@ -624,7 +628,7 @@ public final actor WhiteTippedConnection {
                 self.receiver.pingReceived = data
             }
         case .pong:
-            if #available(iOS 14, *) {
+            if #available(iOS 14, macOS 11.0, *) {
                 self.logger?.trace("Received pong WebSocketFrame")
             } else {
                 guard let oslog = self.oslog else { return }
@@ -640,7 +644,7 @@ public final actor WhiteTippedConnection {
                 do {
                     try await self.ping(autoLoop: self.configuration.wtAutoReplyPing)
                 } catch {
-                    if #available(iOS 14, *) {
+                    if #available(iOS 14, macOS 11.0, *) {
                         self.logger?.error("\(error.localizedDescription)")
                     } else {
                         guard let oslog = self.oslog else { return }
@@ -839,7 +843,7 @@ public final actor WhiteTippedConnection {
 #endif
 
 
-@available(iOS 14, macOS 12, *)
+@available(iOS 14, macOS 11, *)
 extension WhiteTippedConnection {
     var logger: Logger? {
         get { WTLoggerCache.readLogger(LoggerKey(self).logger) }
@@ -847,7 +851,7 @@ extension WhiteTippedConnection {
     }
 }
 
-@available(iOS 13, macOS 12, *)
+@available(iOS 13, macOS 10.14, *)
 extension WhiteTippedConnection {
     var oslog: OSLog? {
         get { return WTOSLogCache.readLogger(OSLogKey(self).logger) }
@@ -855,14 +859,14 @@ extension WhiteTippedConnection {
     }
 }
 
-@available(iOS 14.0, *)
+@available(iOS 14.0, macOS 11, *)
 final class WTLoggerCache: @unchecked Sendable {
     
     static let lock = NSLock()
     static var logger = [ObjectIdentifier: Logger]()
     
     internal class func readLogger(_ key: WhiteTippedConnection) -> LoggerKey.Value? {
-        return logger[ObjectIdentifier(key)]
+        return lock.withLock { logger[ObjectIdentifier(key)] }
     }
     
     internal class func setLogger(_ value: Logger, forKey key: WhiteTippedConnection) {
@@ -872,14 +876,14 @@ final class WTLoggerCache: @unchecked Sendable {
     }
 }
 
-@available(iOS 13, macOS 12, *)
+@available(iOS 13, macOS 10.14, *)
 final class WTOSLogCache: @unchecked Sendable {
     
     static let lock = NSLock()
     static var logger = [ObjectIdentifier: OSLog]()
     
     internal class func readLogger(_ key: WhiteTippedConnection) -> OSLogKey.Value? {
-        return logger[ObjectIdentifier(key)]
+        return lock.withLock { logger[ObjectIdentifier(key)] }
     }
     
     internal class func setLogger(_ value: OSLog, forKey key: WhiteTippedConnection) {
@@ -893,7 +897,7 @@ internal protocol CacheKey {
     associatedtype Value
 }
 
-@available(iOS 14.0, *)
+@available(iOS 14.0, macOS 11, *)
 internal final class LoggerKey: CacheKey {
     typealias Value = Logger
     
@@ -903,7 +907,7 @@ internal final class LoggerKey: CacheKey {
     }
 }
 
-@available(iOS 13, macOS 12, *)
+@available(iOS 13, macOS 10.14, *)
 internal final class OSLogKey: CacheKey {
     typealias Value = OSLog
     

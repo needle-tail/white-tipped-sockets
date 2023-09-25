@@ -16,7 +16,7 @@ public class WebSocketHandler: ChannelInboundHandler {
     public typealias InboundIn = WebSocketFrame
     public typealias OutboundOut = WebSocketFrame
     
-    let websocket: WebSocket
+    public let websocket: WebSocket
     
     init(websocket: WebSocket) {
         self.websocket = websocket

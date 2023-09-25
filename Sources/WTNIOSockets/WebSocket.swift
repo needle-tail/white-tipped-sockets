@@ -20,7 +20,7 @@ public class WebSocket {
     }
     
     
-    func handleRead(_ frame: WebSocketFrame, context: ChannelHandlerContext) async throws {
+    public func handleRead(_ frame: WebSocketFrame, context: ChannelHandlerContext) async throws {
         switch frame.opcode {
         case .connectionClose:
             try await self.receivedClose(context: context, frame: frame)
